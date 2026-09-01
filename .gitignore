@@ -49,3 +49,6 @@ backend/data/
 docs/*.pdf
 docs/*.xlsx
 docs/*.ppt
+
+# Students source directory (not part of the app)
+Students/
