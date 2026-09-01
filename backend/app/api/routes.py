@@ -69,21 +69,25 @@ async def list_sessions():
 @router.get("/products")
 async def list_products():
     """List all available products from the catalog."""
-    # This will be populated from parsed product data
-    return {
-        "products": [
-            {"name": "LV Fersang", "category": "Fer / Énergie", "gamme": "FERBIOTIC"},
-            {"name": "LV Tétra B", "category": "Vitamines B", "gamme": "VITONIC"},
-            {"name": "PULMAX antitussif", "category": "Toux - Sirop", "gamme": "PHYTOTHERA"},
-            {"name": "Oligovit Vitamine C", "category": "Vitamine C", "gamme": "OLIGOVIT"},
-            {"name": "Vitonic Allaitement", "category": "Allaitement", "gamme": "VITONIC"},
-            {"name": "Pédiakids Crème Change", "category": "Dermatologie", "gamme": "PEDIAKIDS"},
-            {"name": "CALMOSS", "category": "Calme", "gamme": "CALMOSS"},
-            {"name": "OMEVIE", "category": "Omega-3", "gamme": "OMEVIE"},
-            {"name": "MINCILIGNE", "category": "Perte de poids", "gamme": "MINCILIGNE"},
-            {"name": "HYDRA", "category": "Hydratation", "gamme": "HYDRA"},
-        ],
-    }
+    import json, os
+    data_path = os.path.join(os.path.dirname(__file__), "..", "..", "data", "processed", "products_llm.json")
+    if os.path.exists(data_path):
+        with open(data_path, "r", encoding="utf-8") as f:
+            products = json.load(f)
+        return {
+            "total": len(products),
+            "products": [
+                {
+                    "name": p.get("name", ""),
+                    "gamme": p.get("gamme", ""),
+                    "presentation": p.get("presentation", ""),
+                    "packaging": p.get("packaging", ""),
+                    "indications": p.get("indications", [])[:5],
+                }
+                for p in products
+            ],
+        }
+    return {"total": 0, "products": []}
 
 
 @router.get("/levels")
