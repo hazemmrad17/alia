@@ -40,3 +40,12 @@ alia-avatar/backend/Students/
 # Source documents (too large for git)
 Students/
 Students.zip
+alia-avatar/
+
+# Backend data (regenerated, not source)
+backend/data/
+
+# Source documents (too large)
+docs/*.pdf
+docs/*.xlsx
+docs/*.ppt
