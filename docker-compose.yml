@@ -61,11 +61,11 @@ services:
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
   # ──────────────────────────────────────────
-  # Next.js Frontend
+  # Next.js Frontend (Unified Admin + Simulators)
   # ──────────────────────────────────────────
   frontend:
     build:
-      context: ./frontend
+      context: ./alia-avatar-admin
       dockerfile: Dockerfile
     container_name: alia-frontend
     ports:

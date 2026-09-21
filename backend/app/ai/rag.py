@@ -4,6 +4,7 @@ Retrieval-Augmented Generation for product knowledge from VITAL SA catalog.
 """
 import os
 import json
+import re
 from typing import List, Optional, Dict, Any
 from loguru import logger
 
@@ -60,18 +61,62 @@ class RAGPipeline:
         self._initialized = True
 
     def _load_fallback_data(self):
-        """Load data from processed JSON files as fallback."""
+        """Index the processed JSON files so RAG still works without ChromaDB.
+
+        Every file in data/processed is a *list* of records (191 products, 150
+        doctors, objections, scripts), so each record becomes its own searchable
+        document. Indexing whole files instead would dump a 170 KB blob into the
+        prompt on the first hit.
+        """
         processed_dir = os.path.join(os.path.dirname(__file__), "..", "..", "data", "processed")
-        for filename in os.listdir(processed_dir) if os.path.exists(processed_dir) else []:
-            if filename.endswith(".json"):
-                filepath = os.path.join(processed_dir, filename)
-                try:
-                    with open(filepath, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                        self._fallback_data[filename] = data
-                        logger.info(f"Loaded fallback data: {filename}")
-                except Exception as e:
-                    logger.error(f"Failed to load {filename}: {e}")
+        if not os.path.exists(processed_dir):
+            logger.warning(f"No processed data directory at {processed_dir}; RAG fallback is empty")
+            return
+
+        for filename in sorted(os.listdir(processed_dir)):
+            if not filename.endswith(".json"):
+                continue
+            filepath = os.path.join(processed_dir, filename)
+            try:
+                with open(filepath, "r", encoding="utf-8") as f:
+                    payload = json.load(f)
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"Failed to load {filename}: {e}")
+                continue
+
+            records = payload if isinstance(payload, list) else [payload]
+            kind = os.path.splitext(filename)[0]
+            for index, record in enumerate(records):
+                text = self._record_to_text(record)
+                if not text:
+                    continue
+                self._fallback_data[f"{filename}#{index}"] = {
+                    "text": text,
+                    "metadata": {"source": filename, "type": kind, "index": index},
+                    "data": record,
+                }
+            logger.info(f"Loaded fallback data: {filename} ({len(records)} records)")
+
+    @staticmethod
+    def _record_to_text(record: Any, max_value_chars: int = 1500) -> str:
+        """Flatten one record into searchable 'key: value' lines."""
+        if isinstance(record, str):
+            return record.strip()
+        if not isinstance(record, dict):
+            return str(record).strip()
+
+        lines = []
+        for key, value in record.items():
+            if value in (None, "", [], {}):
+                continue
+            if isinstance(value, list):
+                rendered = "; ".join(str(v) for v in value)
+            elif isinstance(value, dict):
+                rendered = "; ".join(f"{k}: {v}" for k, v in value.items() if v not in (None, ""))
+            else:
+                rendered = str(value)
+            lines.append(f"{key}: {rendered[:max_value_chars]}")
+        return "\n".join(lines)
 
     def ingest_product(self, product_data: Dict[str, Any]):
         """Ingest a single product into the vector store."""
@@ -248,10 +293,16 @@ ALIA COMPETENCE LEVELS:
             except Exception as e:
                 logger.error(f"Product context query failed: {e}")
 
-        # Fallback
-        for key, data in self._fallback_data.items():
-            if product_name.lower() in key.lower():
-                return data.get("text", "")
+        # Fallback: the product name appears in its own record's text.
+        needle = product_name.lower()
+        matches = [
+            entry.get("text", "")
+            for entry in self._fallback_data.values()
+            if needle and needle in entry.get("text", "").lower()
+        ]
+        if matches:
+            matches.sort(key=len)
+            return "\n\n".join(matches[:2])
         return None
 
     def build_rag_context(self, product_focus: Optional[str] = None) -> str:
@@ -339,16 +390,22 @@ ALIA COMPETENCE LEVELS:
         return "\n".join(parts)
 
     def _fallback_search(self, query: str, n_results: int) -> List[str]:
-        """Simple keyword search fallback."""
-        query_lower = query.lower()
-        results = []
-        for key, data in self._fallback_data.items():
-            text = data.get("text", "")
-            if any(word in text.lower() for word in query_lower.split()):
-                results.append(text)
-                if len(results) >= n_results:
-                    break
-        return results
+        """Keyword search over the fallback index, ranked by how many query
+        terms each document matches."""
+        terms = {w for w in re.split(r"\W+", query.lower()) if len(w) > 2}
+        if not terms:
+            return []
+
+        scored = []
+        for key, entry in self._fallback_data.items():
+            text = entry.get("text", "") if isinstance(entry, dict) else str(entry)
+            haystack = text.lower()
+            score = sum(1 for term in terms if term in haystack)
+            if score:
+                scored.append((score, key, text))
+
+        scored.sort(key=lambda item: (-item[0], item[1]))
+        return [text for _, _, text in scored[:n_results]]
 
 
 # Global instance

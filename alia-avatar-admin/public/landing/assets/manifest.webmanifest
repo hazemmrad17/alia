@@ -1,0 +1,25 @@
+{
+  "name": "Handhold",
+  "short_name": "Handhold",
+  "display": "standalone",
+  "description": "AI agents for tailored client demos & user activation",
+  "start_url": "/",
+  "icons": [
+    {
+      "src": "/icon-192.v2.png",
+      "type": "image/png",
+      "sizes": "192x192"
+    },
+    {
+      "src": "/icon-mask.v2.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/icon-512.v2.png",
+      "type": "image/png",
+      "sizes": "512x512"
+    }
+  ]
+}

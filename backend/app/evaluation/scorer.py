@@ -75,11 +75,15 @@ class VisitScorer:
         strengths = []
         improvements = []
 
+        # Steps the visit actually reached (a step is "covered" once the
+        # session moved to it or past it).
+        reached = self._reached_steps(session)
+
         # Score each step
         for step in [VisitStep.INTRODUCTION, VisitStep.SONDAGE, VisitStep.SYNTHESE,
                      VisitStep.OBJECTIONS, VisitStep.ARGUMENTATION, VisitStep.CONCLUSION]:
 
-            if step.value in [s.value for s in session.messages and session.messages[0].step]:
+            if step in reached:
                 score = self._score_step(step, session, flow)
                 step_scores[step.value] = score
 
@@ -110,11 +114,11 @@ class VisitScorer:
         if total_weight > 0:
             overall /= total_weight
 
-        # Check compliance
+        # Check compliance (matrice: erreurs de conformité doivent être 0)
         compliance_issues = self._check_compliance(session)
         if compliance_issues:
             for issue in compliance_issues:
-                improvements.append(f"Compliance: {issue}")
+                improvements.append(issue)
             overall = max(0, overall - (len(compliance_issues) * 0.5))
 
         # Level progression check
@@ -132,6 +136,43 @@ class VisitScorer:
             areas_for_improvement=improvements[:5],  # Top 5 improvements
             level_progression=level_progression,
         )
+
+    @staticmethod
+    def _reached_steps(session: VisitSession) -> set:
+        """Which visit steps were actually exercised during the session.
+
+        Derived from the step recorded on each message plus the session's
+        current step, so a manual (timer-driven) visit is scored on the steps
+        the trainee really went through — including the last one.
+        """
+        order = [VisitStep.INTRODUCTION, VisitStep.SONDAGE, VisitStep.SYNTHESE,
+                 VisitStep.OBJECTIONS, VisitStep.ARGUMENTATION, VisitStep.CONCLUSION]
+
+        seen = set()
+        for msg in session.messages:
+            step = getattr(msg, "step", None)
+            value = getattr(step, "value", step)
+            if value:
+                try:
+                    seen.add(VisitStep(value))
+                except ValueError:
+                    continue
+
+        current = getattr(session.current_step, "value", session.current_step)
+        if current:
+            try:
+                seen.add(VisitStep(current))
+            except ValueError:
+                pass
+
+        # A step counts as reached only if every earlier step was too.
+        reached = set()
+        for step in order:
+            if step in seen:
+                reached.add(step)
+            else:
+                break
+        return reached
 
     def _score_step(self, step: VisitStep, session: VisitSession, flow: VisitFlowEngine) -> float:
         """Score an individual step."""
@@ -245,20 +286,30 @@ class VisitScorer:
         return improvements.get(step, f"Improve {step.value} performance")
 
     def _check_compliance(self, session: VisitSession) -> List[str]:
-        """Check for compliance violations."""
+        """Check for compliance violations (matrice §2: erreurs de conformité = 0).
+
+        In TRAINING mode the trainee speaks as `user` (ALIA plays the doctor),
+        so it is the user's words that must be screened. In COMMERCIAL mode
+        ALIA speaks as `assistant` — screen those instead.
+        """
         issues = []
+        target_roles = ("user",) if session.mode.value == "training" else ("assistant",)
         for msg in session.messages:
-            if msg.role == "assistant":
-                content = msg.content.lower()
-                # Check for forbidden claims
-                forbidden = [
-                    "guérir", "guarantee", "certain", "toujours efficace",
-                    "aucun effet", "no side effect", "promet",
-                    "definitely", "absolutely safe",
-                ]
-                for word in forbidden:
-                    if word in content:
-                        issues.append(f"Potential compliance issue: '{word}' detected in response")
+            if msg.role not in target_roles:
+                continue
+            content = msg.content.lower()
+            # Forbidden: unverified claims / over-promises (manuel §4.5, §2.2)
+            forbidden = [
+                "guérir", "guarantee", "toujours efficace",
+                "aucun effet", "no side effect", "promet",
+                "definitely", "absolutely safe",
+                "100% sûr", "sans risque", "jamais d'effets",
+                "miracle", "révolutionnaire", "le meilleur du marché",
+            ]
+            for word in forbidden:
+                if word in content:
+                    who = "visiteur" if msg.role == "user" else "ALIA"
+                    issues.append(f"Conformité ({who}) : « {word} » détecté — affirmation non vérifiable")
 
         return issues
 

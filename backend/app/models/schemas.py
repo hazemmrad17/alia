@@ -187,6 +187,9 @@ class ConversationRequest(BaseModel):
     doctor_profile: Optional[DoctorProfile] = None
     level: CompetenceLevel = CompetenceLevel.JUNIOR
     visit_format: VisitFormat = VisitFormat.STANDARD
+    # Live countdown sync (seconds) — lets the simulated doctor pace himself.
+    time_elapsed: int = 0
+    time_budget: int = 0
 
 
 class ConversationResponse(BaseModel):
@@ -238,6 +241,10 @@ class VisitSession(BaseModel):
     ended_at: Optional[datetime] = None
     scores: Dict[str, float] = {}
     level_progression: Dict[str, Any] = {}
+    # Live time budget (seconds), pushed by the frontend each turn so the
+    # simulated doctor can pace his Q&A per remaining time.
+    time_elapsed: int = 0
+    time_budget: int = 0
 
 
 # ──────────────────────────────────────────────

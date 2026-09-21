@@ -13,7 +13,14 @@ class Settings(BaseSettings):
     DEBUG: bool = True
     HOST: str = "0.0.0.0"
     PORT: int = 8000
-    CORS_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:5173"]
+    # Both hostnames: the dev app is opened on localhost:3000 as well as
+    # 127.0.0.1:3000, and an origin mismatch silently blocks the voice uploads.
+    CORS_ORIGINS: List[str] = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ]
     
     # Database
     DB_HOST: str = "localhost"
@@ -28,8 +35,12 @@ class Settings(BaseSettings):
     
     # Groq (OpenAI-compatible, free tier)
     GROQ_API_KEY: str = ""
-    GROQ_MODEL: str = "llama-3.3-70b-versatile"
+    # Must be a model the key actually exposes - see GET /api/v1/voice/status
+    # and the fallback list in app/ai/llm_engine.py.
+    GROQ_MODEL: str = "openai/gpt-oss-120b"
     GROQ_BASE_URL: str = "https://api.groq.com/openai/v1"
+    # Speech-to-text model (Groq serves Whisper, so voice input needs no extra key)
+    GROQ_WHISPER_MODEL: str = "whisper-large-v3"
     
     # Anthropic (Claude)
     ANTHROPIC_API_KEY: str = ""
