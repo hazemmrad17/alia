@@ -1,18 +1,14 @@
 import type { Metadata } from 'next'
 
-import GeneralOverview from '@/views/ala/general-overview'
+import { DelegateHome } from '@/views/ala/training/delegate-home'
 
 export const metadata: Metadata = {
-  title: 'Dashboard | ALIA Avatar',
-  description: "Vue d'ensemble ALIA — entraînement, produits VITAL SA et accès rapides."
+  title: 'Mon espace | ALIA Avatar',
+  description: "Vue d'ensemble et détail de votre formation ALIA."
 }
 
 const TrainingDashboardPage = () => {
-  return (
-    <div className='grid grid-cols-6 gap-6'>
-      <GeneralOverview />
-    </div>
-  )
+  return <DelegateHome />
 }
 
 export default TrainingDashboardPage

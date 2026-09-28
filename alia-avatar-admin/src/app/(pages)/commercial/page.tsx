@@ -17,6 +17,7 @@ import {
   Activity,
   ShoppingCart
 } from 'lucide-react'
+import { authHeaders, notifySessionExpired, tokenQueryParam } from '@/lib/auth'
 
 // ── Types ──
 type Step = 'introduction' | 'sondage' | 'synthese' | 'objections' | 'argumentation' | 'conclusion' | 'completed'
@@ -61,24 +62,42 @@ const DEFAULT_PRODUCTS = [
 ]
 
 const FORMATS: { id: Format; name: string; dur: string; desc: string }[] = [
-  { id: 'flash', name: 'Flash Pitch', dur: '20-60 sec', desc: 'Accroche percutante et proposition de valeur immediate' },
-  { id: 'standard', name: 'Presentation Standard', dur: '2-4 min', desc: 'Presentation detaillee avec posologie et tolerance' },
-  { id: 'approfondie', name: 'Visite Approfondie', dur: '5-8 min', desc: 'Dossier clinique complet et gestion des cas patients' }
+  {
+    id: 'flash',
+    name: 'Flash Pitch',
+    dur: '20-60 sec',
+    desc: 'Accroche percutante et proposition de valeur immediate'
+  },
+  {
+    id: 'standard',
+    name: 'Presentation Standard',
+    dur: '2-4 min',
+    desc: 'Presentation detaillee avec posologie et tolerance'
+  },
+  {
+    id: 'approfondie',
+    name: 'Visite Approfondie',
+    dur: '5-8 min',
+    desc: 'Dossier clinique complet et gestion des cas patients'
+  }
 ]
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
 async function apiFetch<T>(path: string, opts?: RequestInit): Promise<T> {
   const r = await fetch(`${API}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
-    ...opts
+    ...opts,
+    headers: { 'Content-Type': 'application/json', ...authHeaders(opts?.headers) }
   })
+  if (r.status === 401) notifySessionExpired()
   if (!r.ok) throw new Error(`${r.status}`)
   return r.json()
 }
 
 function wsURL(sid: string) {
-  return API.replace(/^http/, 'ws') + `/api/v1/conversation/ws/${sid}`
+  // The socket is authenticated: the handshake carries the token because a
+  // browser cannot set an Authorization header on it.
+  return API.replace(/^http/, 'ws') + `/api/v1/conversation/ws/${sid}` + tokenQueryParam()
 }
 
 function demoGreeting(product: string) {
@@ -106,9 +125,7 @@ export default function CommercialPage() {
   return (
     <div className='w-full'>
       {view === 'setup' && <Setup config={config} setConfig={setConfig} onStart={() => setView('chat')} />}
-      {view === 'chat' && (
-        <Chat config={config} onBack={() => setView('setup')} onDash={() => setView('dashboard')} />
-      )}
+      {view === 'chat' && <Chat config={config} onBack={() => setView('setup')} onDash={() => setView('dashboard')} />}
       {view === 'dashboard' && <Dashboard onBack={() => setView('chat')} />}
     </div>
   )
@@ -127,34 +144,43 @@ function Setup({
   const [products, setProducts] = useState(DEFAULT_PRODUCTS)
 
   useEffect(() => {
-    fetch(`${API}/api/v1/products`)
+    fetch(`${API}/api/v1/products`, { headers: authHeaders() })
       .then(r => r.json())
       .then(d => {
-        if (d.products?.length) setProducts(d.products.map((p: any) => p.name || p))
+        if (!d.products?.length) return
+
+        // The catalogue holds four names twice (the same brand in two gammes),
+        // and this picker answers "which product are you presenting?" — one
+        // button per name, or the doctor is offered an identical choice twice.
+        const names: string[] = d.products.map((p: any) => p.name || p)
+
+        setProducts(Array.from(new Set(names)))
       })
       .catch(() => {})
   }, [])
 
   return (
-    <div className='max-w-5xl mx-auto py-4 space-y-8'>
+    <div className='mx-auto max-w-5xl space-y-8 py-4'>
       {/* Header */}
-      <div className='flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-border pb-6'>
+      <div className='border-border flex flex-col justify-between gap-4 border-b pb-6 md:flex-row md:items-center'>
         <div className='flex items-center gap-4'>
-          <div className='size-14 rounded-2xl bg-primary/10 text-primary flex items-center justify-center shadow-sm'>
+          <div className='bg-primary/10 text-primary flex size-14 items-center justify-center rounded-2xl shadow-sm'>
             <Pill className='size-7' />
           </div>
           <div>
-            <h1 className='text-2xl font-bold tracking-tight text-foreground'>Présentation Commerciale & Produits VITAL SA</h1>
-            <p className='text-sm text-muted-foreground'>
+            <h1 className='text-foreground text-2xl font-bold tracking-tight'>
+              Présentation Commerciale & Produits VITAL SA
+            </h1>
+            <p className='text-muted-foreground text-sm'>
               Simulez ou présentez les produits du catalogue avec l'Avatar ALIA pour médecins et pharmaciens
             </p>
           </div>
         </div>
         <Link
           href='/products/catalog'
-          className='inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-xl border border-border bg-card hover:bg-accent text-foreground transition-colors w-fit'
+          className='border-border bg-card hover:bg-accent text-foreground inline-flex w-fit items-center gap-2 rounded-xl border px-4 py-2 text-sm font-medium transition-colors'
         >
-          <ShoppingCart className='size-4 text-primary' />
+          <ShoppingCart className='text-primary size-4' />
           Catalogue Produits
         </Link>
       </div>
@@ -162,24 +188,26 @@ function Setup({
       {/* Select Product */}
       <section className='space-y-3'>
         <div className='flex items-center gap-2'>
-          <Package className='size-4 text-primary' />
-          <h2 className='text-sm font-semibold uppercase tracking-wider text-muted-foreground'>1. Choix du Produit Pharmaceutique</h2>
+          <Package className='text-primary size-4' />
+          <h2 className='text-muted-foreground text-sm font-semibold tracking-wider uppercase'>
+            1. Choix du Produit Pharmaceutique
+          </h2>
         </div>
-        <div className='grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3'>
+        <div className='grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-5'>
           {products.map(p => {
             const isSelected = config.product === p
             return (
               <button
                 key={p}
                 onClick={() => setConfig({ ...config, product: p })}
-                className={`p-3.5 rounded-xl border-2 text-left transition-all ${
+                className={`rounded-xl border-2 p-3.5 text-left transition-all ${
                   isSelected
-                    ? 'border-primary bg-primary/10 shadow-sm ring-1 ring-primary/30'
+                    ? 'border-primary bg-primary/10 ring-primary/30 shadow-sm ring-1'
                     : 'border-border bg-card hover:border-primary/40 hover:bg-accent/50'
                 }`}
               >
-                <p className='font-semibold text-xs text-foreground truncate'>{p}</p>
-                <span className='text-[10px] text-muted-foreground'>VITAL SA</span>
+                <p className='text-foreground truncate text-xs font-semibold'>{p}</p>
+                <span className='text-muted-foreground text-[10px]'>VITAL SA</span>
               </button>
             )
           })}
@@ -189,23 +217,25 @@ function Setup({
       {/* Format Selection */}
       <section className='space-y-3'>
         <div className='flex items-center gap-2'>
-          <Activity className='size-4 text-primary' />
-          <h2 className='text-sm font-semibold uppercase tracking-wider text-muted-foreground'>2. Format de la Présentation</h2>
+          <Activity className='text-primary size-4' />
+          <h2 className='text-muted-foreground text-sm font-semibold tracking-wider uppercase'>
+            2. Format de la Présentation
+          </h2>
         </div>
-        <div className='grid grid-cols-1 sm:grid-cols-3 gap-4'>
+        <div className='grid grid-cols-1 gap-4 sm:grid-cols-3'>
           {FORMATS.map(f => (
             <button
               key={f.id}
               onClick={() => setConfig({ ...config, format: f.id })}
-              className={`p-4 rounded-xl border-2 text-center transition-all ${
+              className={`rounded-xl border-2 p-4 text-center transition-all ${
                 config.format === f.id
-                  ? 'border-primary bg-primary/10 shadow-sm ring-1 ring-primary/30'
+                  ? 'border-primary bg-primary/10 ring-primary/30 shadow-sm ring-1'
                   : 'border-border bg-card hover:border-primary/40 hover:bg-accent/50'
               }`}
             >
-              <p className='font-semibold text-foreground text-sm'>{f.name}</p>
-              <p className='text-xs font-semibold text-primary mt-0.5'>{f.dur}</p>
-              <p className='text-[11px] text-muted-foreground mt-1'>{f.desc}</p>
+              <p className='text-foreground text-sm font-semibold'>{f.name}</p>
+              <p className='text-primary mt-0.5 text-xs font-semibold'>{f.dur}</p>
+              <p className='text-muted-foreground mt-1 text-[11px]'>{f.desc}</p>
             </button>
           ))}
         </div>
@@ -215,7 +245,7 @@ function Setup({
       <button
         onClick={onStart}
         disabled={!config.product}
-        className='w-full py-4 rounded-2xl font-semibold text-base bg-primary text-white hover:bg-primary disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-md flex items-center justify-center gap-2.5 cursor-pointer'
+        className='bg-primary hover:bg-primary flex w-full cursor-pointer items-center justify-center gap-2.5 rounded-2xl py-4 text-base font-semibold text-white shadow-md transition-all disabled:cursor-not-allowed disabled:opacity-40'
       >
         <Sparkles className='size-5' />
         {config.product
@@ -227,15 +257,7 @@ function Setup({
 }
 
 // ── CHAT COMPONENT ──
-function Chat({
-  config,
-  onBack,
-  onDash
-}: {
-  config: Config
-  onBack: () => void
-  onDash: () => void
-}) {
+function Chat({ config, onBack, onDash }: { config: Config; onBack: () => void; onDash: () => void }) {
   const [msgs, setMsgs] = useState<Msg[]>([])
   const [input, setInput] = useState('')
   const [typing, setTyping] = useState(false)
@@ -246,6 +268,8 @@ function Chat({
   const [demo, setDemo] = useState(false)
   const [wsStatus, setWsStatus] = useState('disconnected')
   const endRef = useRef<HTMLDivElement>(null)
+  const startedAtRef = useRef<number | null>(null)
+  const completedRef = useRef(false)
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -267,10 +291,12 @@ function Chat({
         setSid(r.session_id)
         setStep(r.current_step)
         setMsgs([{ role: 'assistant', content: r.greeting, time: new Date(), step: r.current_step }])
+        startedAtRef.current = Date.now()
         setStarted(true)
       } catch {
         setDemo(true)
         setMsgs([{ role: 'assistant', content: demoGreeting(config.product), time: new Date(), step: 'introduction' }])
+        startedAtRef.current = Date.now()
         setStarted(true)
       }
     })()
@@ -292,6 +318,30 @@ function Chat({
     ws.onclose = () => setWsStatus('disconnected')
     return () => ws.close()
   }, [sid, demo])
+
+  // The visit report only exists once the server records it. Until now a
+  // finished presentation just flipped a local step and reached nobody, which
+  // is why the admin side had nothing to show: POST the completion so the
+  // report reaches disk, the manager and the doctor's own history. Fired once,
+  // when the flow reaches its last step, and never in demo mode (no session).
+  useEffect(() => {
+    if (step !== 'completed' || !sid || demo || completedRef.current) return
+    completedRef.current = true
+
+    const duration = startedAtRef.current ? (Date.now() - startedAtRef.current) / 1000 : 0
+
+    void apiFetch(`/api/v1/session/${sid}/complete`, {
+      method: 'POST',
+      body: JSON.stringify({
+        duration_seconds: duration,
+        level: 'junior',
+        visit_format: config.format,
+        product_focus: config.product,
+        messages: msgs.length,
+        mode: 'commercial'
+      })
+    }).catch(() => {})
+  }, [step, sid, demo, config.format, config.product, msgs.length])
 
   const send = async () => {
     if (!input.trim() || typing || step === 'completed') return
@@ -344,49 +394,49 @@ function Chat({
   }
 
   return (
-    <div className='flex flex-col h-[calc(100vh-12rem)] min-h-[550px] bg-card border border-border rounded-2xl overflow-hidden shadow-sm'>
-      <div className='border-b border-border px-5 py-3.5 flex flex-wrap items-center justify-between gap-3 bg-card/60 backdrop-blur'>
+    <div className='bg-card border-border flex h-[calc(100vh-12rem)] min-h-[550px] flex-col overflow-hidden rounded-2xl border shadow-sm'>
+      <div className='border-border bg-card/60 flex flex-wrap items-center justify-between gap-3 border-b px-5 py-3.5 backdrop-blur'>
         <div className='flex items-center gap-3'>
           <button
             onClick={onBack}
-            className='inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground px-2.5 py-1.5 rounded-lg border border-border bg-background'
+            className='text-muted-foreground hover:text-foreground border-border bg-background inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium'
           >
             <ArrowLeft className='size-3.5' /> Configuration
           </button>
-          <div className='border-l border-border pl-3'>
-            <h2 className='font-semibold text-sm text-foreground flex items-center gap-1.5'>
+          <div className='border-border border-l pl-3'>
+            <h2 className='text-foreground flex items-center gap-1.5 text-sm font-semibold'>
               Présentation Commerciale ALIA
             </h2>
-            <p className='text-xs text-muted-foreground'>
+            <p className='text-muted-foreground text-xs'>
               {config.product} - Format {config.format}
             </p>
           </div>
-          <div className='flex items-center gap-1.5 ml-2'>
+          <div className='ml-2 flex items-center gap-1.5'>
             <span
               className={`size-2 rounded-full ${
                 demo ? 'bg-amber-500' : wsStatus === 'connected' ? 'bg-primary' : 'bg-muted-foreground'
               }`}
             />
-            <span className='text-xs text-muted-foreground'>
+            <span className='text-muted-foreground text-xs'>
               {demo ? 'Mode Démo' : wsStatus === 'connected' ? 'En Direct' : wsStatus}
             </span>
           </div>
         </div>
 
         <div className='flex items-center gap-4'>
-          <div className='hidden sm:flex items-center gap-1.5'>
+          <div className='hidden items-center gap-1.5 sm:flex'>
             {STEPS.map((s, i) => {
               const isDone = STEPS.indexOf(step) > i || step === 'completed'
               const isActive = s === step
               return (
                 <div
                   key={s}
-                  className={`size-7 rounded-full flex items-center justify-center text-xs font-semibold transition-all ${
+                  className={`flex size-7 items-center justify-center rounded-full text-xs font-semibold transition-all ${
                     isDone
                       ? 'bg-primary text-white'
                       : isActive
-                      ? 'bg-primary text-white ring-2 ring-primary/30 scale-105'
-                      : 'bg-muted text-muted-foreground'
+                        ? 'bg-primary ring-primary/30 scale-105 text-white ring-2'
+                        : 'bg-muted text-muted-foreground'
                   }`}
                   title={STEP_LABELS[s].label}
                 >
@@ -396,14 +446,14 @@ function Chat({
             })}
           </div>
 
-          <div className='text-right border-l border-border pl-4'>
-            <p className='text-[10px] uppercase font-semibold text-muted-foreground'>Engagement</p>
-            <p className='text-base font-bold text-primary'>{score.toFixed(1)}/10</p>
+          <div className='border-border border-l pl-4 text-right'>
+            <p className='text-muted-foreground text-[10px] font-semibold uppercase'>Engagement</p>
+            <p className='text-primary text-base font-bold'>{score.toFixed(1)}/10</p>
           </div>
 
           <button
             onClick={onDash}
-            className='p-2 hover:bg-accent rounded-xl text-muted-foreground hover:text-foreground border border-border'
+            className='hover:bg-accent text-muted-foreground hover:text-foreground border-border rounded-xl border p-2'
             title='Voir les analyses'
           >
             <BarChart3 className='size-4' />
@@ -411,36 +461,36 @@ function Chat({
         </div>
       </div>
 
-      <div className='flex-1 overflow-y-auto p-5 space-y-4 bg-background/50'>
+      <div className='bg-background/50 flex-1 space-y-4 overflow-y-auto p-5'>
         {msgs.map((m, i) => (
           <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
             <div
-              className={`max-w-[85%] md:max-w-[70%] rounded-2xl px-5 py-3.5 shadow-sm text-sm ${
+              className={`max-w-[85%] rounded-2xl px-5 py-3.5 text-sm shadow-sm md:max-w-[70%] ${
                 m.role === 'user'
-                  ? 'bg-primary text-white rounded-br-none'
-                  : 'bg-card border border-border text-card-foreground rounded-bl-none'
+                  ? 'bg-primary rounded-br-none text-white'
+                  : 'bg-card border-border text-card-foreground rounded-bl-none border'
               }`}
             >
               {m.role === 'assistant' && (
-                <div className='flex items-center gap-2 mb-1.5'>
-                  <Bot className='size-3.5 text-primary' />
-                  <span className='text-xs font-semibold text-primary'>ALIA Présentateur</span>
+                <div className='mb-1.5 flex items-center gap-2'>
+                  <Bot className='text-primary size-3.5' />
+                  <span className='text-primary text-xs font-semibold'>ALIA Présentateur</span>
                   {m.step && STEP_LABELS[m.step] && (
-                    <span className='text-[11px] px-2 py-0.2 rounded-full bg-muted text-muted-foreground font-medium'>
+                    <span className='py-0.2 bg-muted text-muted-foreground rounded-full px-2 text-[11px] font-medium'>
                       {STEP_LABELS[m.step].label}
                     </span>
                   )}
                 </div>
               )}
               {m.role === 'user' && (
-                <div className='flex items-center gap-2 mb-1.5 justify-end text-primary-foreground/60'>
+                <div className='text-primary-foreground/60 mb-1.5 flex items-center justify-end gap-2'>
                   <span className='text-xs font-semibold'>Médecin / Pharmacien</span>
                   <User className='size-3.5' />
                 </div>
               )}
-              <div className='whitespace-pre-wrap leading-relaxed'>{m.content}</div>
+              <div className='leading-relaxed whitespace-pre-wrap'>{m.content}</div>
               <div
-                className={`text-[10px] mt-2 ${
+                className={`mt-2 text-[10px] ${
                   m.role === 'user' ? 'text-primary-foreground/80 text-right' : 'text-muted-foreground'
                 }`}
               >
@@ -451,11 +501,11 @@ function Chat({
         ))}
         {typing && (
           <div className='flex justify-start'>
-            <div className='bg-card border border-border rounded-2xl rounded-bl-none px-4 py-3'>
+            <div className='bg-card border-border rounded-2xl rounded-bl-none border px-4 py-3'>
               <div className='flex items-center gap-1.5'>
-                <div className='size-2 bg-primary rounded-full animate-bounce' />
-                <div className='size-2 bg-primary rounded-full animate-bounce [animation-delay:0.2s]' />
-                <div className='size-2 bg-primary rounded-full animate-bounce [animation-delay:0.4s]' />
+                <div className='bg-primary size-2 animate-bounce rounded-full' />
+                <div className='bg-primary size-2 animate-bounce rounded-full [animation-delay:0.2s]' />
+                <div className='bg-primary size-2 animate-bounce rounded-full [animation-delay:0.4s]' />
               </div>
             </div>
           </div>
@@ -463,13 +513,13 @@ function Chat({
         <div ref={endRef} />
       </div>
 
-      <div className='border-t border-border p-4 bg-card'>
+      <div className='border-border bg-card border-t p-4'>
         <form
           onSubmit={e => {
             e.preventDefault()
             send()
           }}
-          className='flex items-center gap-3 max-w-4xl mx-auto'
+          className='mx-auto flex max-w-4xl items-center gap-3'
         >
           <input
             value={input}
@@ -480,13 +530,13 @@ function Chat({
                 : 'Posez une question sur le produit, le prix ou la posologie...'
             }
             disabled={step === 'completed' || typing}
-            className='flex-1 px-4 py-3 rounded-xl bg-background border border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm disabled:opacity-50'
+            className='bg-background border-border text-foreground placeholder:text-muted-foreground focus:ring-primary/30 flex-1 rounded-xl border px-4 py-3 text-sm focus:ring-2 focus:outline-none disabled:opacity-50'
             autoFocus
           />
           <button
             type='submit'
             disabled={!input.trim() || typing || step === 'completed'}
-            className='px-5 py-3 rounded-xl bg-primary text-white font-medium text-sm hover:bg-primary disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2 cursor-pointer'
+            className='bg-primary hover:bg-primary flex cursor-pointer items-center gap-2 rounded-xl px-5 py-3 text-sm font-medium text-white transition-colors disabled:cursor-not-allowed disabled:opacity-50'
           >
             <Send className='size-4' />
             Envoyer
@@ -503,7 +553,7 @@ function Dashboard({ onBack }: { onBack: () => void }) {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    fetch(`${API}/api/v1/dashboard/stats`)
+    fetch(`${API}/api/v1/dashboard/stats`, { headers: authHeaders() })
       .then(r => r.json())
       .then(setStats)
       .catch(() => {})
@@ -524,46 +574,46 @@ function Dashboard({ onBack }: { onBack: () => void }) {
   const s = stats || demoStats
 
   return (
-    <div className='max-w-6xl mx-auto py-4 space-y-6'>
+    <div className='mx-auto max-w-6xl space-y-6 py-4'>
       <div className='flex items-center justify-between'>
         <button
           onClick={onBack}
-          className='inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-xl border border-border bg-card hover:bg-accent text-foreground transition-colors'
+          className='border-border bg-card hover:bg-accent text-foreground inline-flex items-center gap-2 rounded-xl border px-3 py-1.5 text-sm font-medium transition-colors'
         >
           <ArrowLeft className='size-4' /> Retour à la présentation
         </button>
-        <h1 className='text-xl font-bold text-foreground'>Tableau de bord commercial</h1>
+        <h1 className='text-foreground text-xl font-bold'>Tableau de bord commercial</h1>
       </div>
 
-      <div className='grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4'>
+      <div className='grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4'>
         {[
           { icon: <Package className='size-5' />, label: 'Présentations Totales', value: s.total_sessions },
           { icon: <TrendingUp className='size-5' />, label: 'Engagement Moyen', value: `${s.average_score}/10` },
           { icon: <Pill className='size-5' />, label: 'Produits Couverts', value: s.top_products?.length || 0 },
           { icon: <FileText className='size-5' />, label: 'Rapports CRM Générés', value: '18' }
         ].map((c, i) => (
-          <div key={i} className='bg-card rounded-2xl p-5 border border-border shadow-sm'>
-            <div className='size-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center mb-3'>
+          <div key={i} className='bg-card border-border rounded-2xl border p-5 shadow-sm'>
+            <div className='bg-primary/10 text-primary mb-3 flex size-10 items-center justify-center rounded-xl'>
               {c.icon}
             </div>
-            <p className='text-2xl font-bold text-foreground'>{c.value}</p>
-            <p className='text-xs text-muted-foreground mt-0.5'>{c.label}</p>
+            <p className='text-foreground text-2xl font-bold'>{c.value}</p>
+            <p className='text-muted-foreground mt-0.5 text-xs'>{c.label}</p>
           </div>
         ))}
       </div>
 
-      <div className='bg-card rounded-2xl p-6 border border-border shadow-sm space-y-4'>
-        <h2 className='text-base font-semibold text-foreground'>Produits les Plus Présentés</h2>
+      <div className='bg-card border-border space-y-4 rounded-2xl border p-6 shadow-sm'>
+        <h2 className='text-foreground text-base font-semibold'>Produits les Plus Présentés</h2>
         <div className='space-y-3'>
           {s.top_products?.map((p: any, i: number) => (
-            <div key={i} className='flex items-center justify-between p-3 rounded-xl bg-muted/40'>
+            <div key={i} className='bg-muted/40 flex items-center justify-between rounded-xl p-3'>
               <div className='flex items-center gap-3'>
-                <span className='size-8 bg-primary/10 text-primary rounded-lg flex items-center justify-center text-sm font-bold'>
+                <span className='bg-primary/10 text-primary flex size-8 items-center justify-center rounded-lg text-sm font-bold'>
                   {i + 1}
                 </span>
-                <span className='font-medium text-sm text-foreground'>{p.name}</span>
+                <span className='text-foreground text-sm font-medium'>{p.name}</span>
               </div>
-              <span className='text-xs text-muted-foreground font-medium'>{p.count} sessions</span>
+              <span className='text-muted-foreground text-xs font-medium'>{p.count} sessions</span>
             </div>
           ))}
         </div>

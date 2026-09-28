@@ -49,6 +49,7 @@ import type { Product } from '@/types/alia'
 import SupportReportForm from '@/components/support/support-report-form'
 import Splash from './Splash'
 import SetupLoader from './SetupLoader'
+import { authHeaders, notifySessionExpired, tokenQueryParam } from '@/lib/auth'
 
 // ── Types ──
 type Step = VisitStep | 'completed'
@@ -110,15 +111,18 @@ const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
 async function apiFetch<T>(path: string, opts?: RequestInit): Promise<T> {
   const r = await fetch(`${API}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
-    ...opts
+    ...opts,
+    headers: { 'Content-Type': 'application/json', ...authHeaders(opts?.headers) }
   })
+  if (r.status === 401) notifySessionExpired()
   if (!r.ok) throw new Error(`${r.status}`)
   return r.json()
 }
 
 function wsURL(sid: string) {
-  return API.replace(/^http/, 'ws') + `/api/v1/conversation/ws/${sid}`
+  // The socket is authenticated: the handshake carries the token because a
+  // browser cannot set an Authorization header on it.
+  return API.replace(/^http/, 'ws') + `/api/v1/conversation/ws/${sid}` + tokenQueryParam()
 }
 
 function demoGreeting(c: Config) {
@@ -1174,7 +1178,7 @@ function Interview({
       try {
         const res = await fetch(`${API}/api/v1/chat/stream`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
           body: JSON.stringify({
             session_id: sid,
             message: '(Le temps imparti pour cette visite est écoulé.)',
@@ -1239,7 +1243,7 @@ function Interview({
         // exactly like the chat replies.
         const res = await fetch(`${API}/api/v1/session/start/stream`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
           body: JSON.stringify({
             mode: 'training',
             level: config.level,
@@ -1494,7 +1498,7 @@ function Interview({
         // Streamed REST turn: NDJSON frames {token} … {reply_end}.
         const res = await fetch(`${API}/api/v1/chat/stream`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
           body: JSON.stringify({
             session_id: sid,
             message: m,
@@ -1978,7 +1982,7 @@ function ThanksView({
       if (sessionId) {
         await fetch(`${API}/api/v1/session/${sessionId}/feedback`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
           body: JSON.stringify(payload)
         })
       }

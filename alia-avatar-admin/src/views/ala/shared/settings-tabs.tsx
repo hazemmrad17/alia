@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Settings, History, LineChart, Activity, Server, Cpu, CheckCircle2, XCircle, UserCog, IdCard, Link2 } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -10,6 +10,7 @@ import ScoreTrendsView from './score-trends'
 import UserGeneral from '@/views/pages/user-settings/general'
 import Profile from '@/views/pages/user-profile/profile'
 import ConnectionsCard from '@/views/pages/user-profile/connections'
+import { useStoredRole } from '@/lib/user-role'
 
 // ── Tab registry ────────────────────────────────────────────────────────────────
 // VITAL Products lives as its own navbar page (shared by both roles) — not here.
@@ -24,6 +25,15 @@ const TABS = [
 ] as const
 
 type TabId = (typeof TABS)[number]['id']
+
+// The medical delegate's Settings is about their own account: linked devices,
+// their session log, their score trends and the operator's backend health all
+// belong to someone else's job (and the delegate already reaches the first three
+// from its own workspace). The Profile tab goes with them — it is the template's
+// demo page, built on invented teams, projects and an activity log from
+// fake-db, and the real personal details live in Account Settings.
+// Administrators and doctors keep the full page.
+const DELEGATE_HIDDEN_TABS: readonly TabId[] = ['profile', 'connections', 'history', 'trends', 'status']
 
 // ── General tab bits ─────────────────────────────────────────────────────────────
 function SettingRow({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
@@ -71,7 +81,21 @@ const ENDPOINTS = [
 
 // ── Main component ────────────────────────────────────────────────────────────────
 export default function SettingsTabs({ initialTab }: { initialTab?: string }) {
-  const [tab, setTab] = useState<TabId>((TABS.some(t => t.id === initialTab) ? initialTab : 'general') as TabId)
+  const role = useStoredRole()
+
+  const tabs = useMemo(
+    () => (role === 'delegate' ? TABS.filter(t => !DELEGATE_HIDDEN_TABS.includes(t.id)) : [...TABS]),
+    [role]
+  )
+
+  const [requested, setRequested] = useState<TabId>(() =>
+    TABS.some(t => t.id === initialTab) ? (initialTab as TabId) : 'general'
+  )
+
+  // A deep link into a tab this workspace does not show lands on General rather
+  // than on an empty page.
+  const tab: TabId = tabs.some(t => t.id === requested) ? requested : 'general'
+
   const health = useHealthCheck()
 
   return (
@@ -83,14 +107,16 @@ export default function SettingsTabs({ initialTab }: { initialTab?: string }) {
           <h1 className='text-2xl font-bold'>Settings</h1>
         </div>
         <p className='text-sm text-muted-foreground'>
-          Manage your workspace — account configuration, session history, performance trends, and backend status.
+          {role === 'delegate'
+            ? 'Your account and your workspace preferences.'
+            : 'Manage your workspace — account configuration, session history, performance trends, and backend status.'}
         </p>
       </div>
 
       {/* Tab bar */}
-      <Tabs value={tab} onValueChange={v => setTab(v as TabId)} className='col-span-full'>
+      <Tabs value={tab} onValueChange={v => setRequested(v as TabId)} className='col-span-full'>
         <TabsList className='mb-6 w-full justify-start overflow-x-auto sm:w-fit sm:justify-start'>
-          {TABS.map(t => {
+          {tabs.map(t => {
             const Icon = t.icon
             return (
               <TabsTrigger key={t.id} value={t.id} className='gap-2'>

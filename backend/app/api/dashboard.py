@@ -1,13 +1,16 @@
 """
 ALIA Avatar - Dashboard API Routes
 """
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import Dict, Any, List, Optional
 from loguru import logger
 import json
 import os
 from datetime import datetime, timedelta
 
+from app.auth import store
+from app.auth.deps import get_current_user
+from app.config import data_dir, get_settings
 from app.conversation.orchestrator import orchestrator
 from app.models.schemas import SessionStats, CompetenceLevel
 
@@ -15,7 +18,7 @@ router = APIRouter(tags=["dashboard"])
 
 
 def _data_path(filename: str) -> str:
-    return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "data", filename))
+    return os.path.join(data_dir(), filename)
 
 
 def _load_records(filename: str) -> List[Dict[str, Any]]:
@@ -42,6 +45,78 @@ def _report_rows() -> List[Dict[str, Any]]:
     rows = [r for r in _load_records("session_reports.json") if r.get("session_id")]
     rows.sort(key=lambda r: r.get("completed_at") or "", reverse=True)
     return rows
+
+
+def _viewer_tenant(user: Optional[Dict[str, Any]]) -> Optional[str]:
+    """The tenant the requester belongs to, read from the account record.
+
+    The token carries a tenant claim as well, but a token is a snapshot of the
+    moment it was signed: the account is the truth, so a tenant that changed
+    takes effect on the next request instead of whenever the token expires.
+    """
+    if not user:
+        return None
+
+    return store.tenant_of(str(user.get("id") or "")) or user.get("tenant_id")
+
+
+def _visible_reports(user: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The reports the requester is allowed to read.
+
+    Two rules, both enforced here rather than at each call site, because every
+    dashboard figure is built from this list and never from _report_rows()
+    directly:
+
+    * **Role.** An admin reads their tenant's history; anyone else only the
+      sessions stamped with their own id. An unscoped read handed a delegate the
+      whole platform's history.
+    * **Tenant.** A manager may only ever read their own tenant's sessions. A
+      report is attributed through its owner account, so a row whose owner sits
+      in another tenant is invisible. Legacy reports written before identity was
+      recorded carry no owner at all; they belong to the install's own tenant and
+      to nobody else.
+    """
+    rows = _report_rows()
+
+    if not user:
+        return []
+
+    if user.get("role") != "admin":
+        user_id = user.get("id")
+        return [r for r in rows if user_id and r.get("user_id") == user_id]
+
+    tenant = store.normalize_tenant(_viewer_tenant(user))
+    owners = store.tenants_by_user()
+    default_tenant = get_settings().DEFAULT_TENANT_ID
+
+    visible: List[Dict[str, Any]] = []
+
+    for row in rows:
+        owner = row.get("user_id")
+
+        if not owner:
+            # Written before identity was recorded: the install's own tenant.
+            if tenant == default_tenant:
+                visible.append(row)
+            continue
+
+        owner_tenant = owners.get(owner)
+
+        if owner_tenant is None:
+            # The owner account is gone, so the row can no longer be attributed
+            # to any tenant. No account claims it, and in particular it is NOT
+            # read as "default tenant": a deleted account from another tenant
+            # must not surface here.
+            continue
+
+        if store.same_tenant(owner_tenant, tenant):
+            visible.append(row)
+
+    return visible
+
+
+def _is_admin(user: Optional[Dict[str, Any]]) -> bool:
+    return bool(user and user.get("role") == "admin")
 
 
 def _row_score(row: Dict[str, Any]) -> Optional[float]:
@@ -129,12 +204,17 @@ async def get_saved_sessions(
     ),
     limit: int = Query(default=50, ge=1, le=500),
     level: Optional[str] = Query(default=None, description="Filter by competence level."),
+    mode: Optional[str] = Query(
+        default=None,
+        description="Filter by session mode: training | commercial.",
+    ),
     visit_format: Optional[str] = Query(default=None, description="Filter by visit format."),
     rated_only: bool = Query(default=False, description="Only sessions that received a rating."),
     since: Optional[str] = Query(
         default=None,
         description="ISO date — keep sessions completed on or after it (day/week/month windows).",
     ),
+    user: Dict[str, Any] = Depends(get_current_user),
 ):
     """Finished sessions persisted on disk, newest first.
 
@@ -142,8 +222,24 @@ async def get_saved_sessions(
     CRM report — only what the trainee already knows (date, config, duration,
     and the feedback/rating he left). Pass `include_scores=true` for the admin
     view.
+
+    The rows themselves are scoped to the requester: an admin reads the whole
+    history, everyone else only their own sessions. Stripping the scores was not
+    enough — who trained with which doctor and when is still not a colleague's
+    to read.
+
+    "Admin only" was a description, not a rule: authentication was enforced but
+    the role was never checked, so a delegate could ask for include_scores=true
+    and receive every account's evaluations and CRM reports. The role is checked
+    here now, because a payload gated by convention is not gated at all.
     """
-    reports = _report_rows()
+    if include_scores and user.get("role") != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Les évaluations des sessions sont réservées aux administrateurs.",
+        )
+
+    reports = _visible_reports(user)
     feedback = {f.get("session_id"): f for f in _load_records("session_feedback.json")}
     since_dt = _parse_iso(since)
 
@@ -152,6 +248,8 @@ async def get_saved_sessions(
         sid = r.get("session_id")
         fb = feedback.get(sid, {})
         if level and (r.get("level") or "").lower() != level.lower():
+            continue
+        if mode and (r.get("mode") or "training").lower() != mode.lower():
             continue
         if visit_format and (r.get("visit_format") or "").lower() != visit_format.lower():
             continue
@@ -164,6 +262,9 @@ async def get_saved_sessions(
                 continue
         entry: Dict[str, Any] = {
             "session_id": sid,
+            # A presentation and a training session share this table; without the
+            # mode a reader cannot tell one from the other.
+            "mode": r.get("mode") or "training",
             "level": r.get("level"),
             "visit_format": r.get("visit_format"),
             "doctor_style": r.get("doctor_style"),
@@ -210,6 +311,12 @@ async def get_saved_sessions(
 
     durations = [_row_duration(r) for r in reports if _row_duration(r) > 0]
 
+    mode_counts: Dict[str, int] = {}
+
+    for r in reports:
+        key = r.get("mode") or "training"
+        mode_counts[key] = mode_counts.get(key, 0) + 1
+
     return {
         "total": len(sessions),
         "this_week": sum(1 for s in sessions if (s.get("completed_at") or "") >= week_ago.isoformat()),
@@ -222,24 +329,27 @@ async def get_saved_sessions(
         "weekly": _week_activity(reports),
         "filters": {
             "level": level,
+            "mode": mode,
             "visit_format": visit_format,
             "rated_only": rated_only,
             "since": since,
         },
+        "modes": mode_counts,
         "include_scores": include_scores,
         "sessions": sessions[:limit],
     }
 
 
 @router.get("/stats", response_model=SessionStats)
-async def get_dashboard_stats():
+async def get_dashboard_stats(user: Dict[str, Any] = Depends(get_current_user)):
     """Get overall dashboard statistics.
 
     Read from the reports persisted on disk so a backend restart never wipes the
-    dashboard; the in-memory sessions are only a fallback for a fresh install.
+    dashboard; the in-memory sessions are only a fallback for a fresh install,
+    and only an admin may fall back to the shared in-memory store.
     """
-    reports = _report_rows()
-    if reports:
+    reports = _visible_reports(user)
+    if reports or not _is_admin(user):
         scores = [s for s in (_row_score(r) for r in reports) if s is not None]
         level_dist: Dict[str, int] = {level.value: 0 for level in CompetenceLevel}
         product_counts: Dict[str, int] = {}
@@ -259,7 +369,7 @@ async def get_dashboard_stats():
             recent_sessions=[
                 {
                     "id": r.get("session_id"),
-                    "mode": "training",
+                    "mode": r.get("mode") or "training",
                     "level": r.get("level") or "junior",
                     "product": _row_product(r) or "—",
                     "score": _row_score(r) or 0,
@@ -310,10 +420,10 @@ async def get_dashboard_stats():
 
 
 @router.get("/scores/level-distribution")
-async def get_level_distribution():
-    """Get score distribution by level (persisted reports first)."""
-    reports = _report_rows()
-    if reports:
+async def get_level_distribution(user: Dict[str, Any] = Depends(get_current_user)):
+    """Get score distribution by level (persisted reports first, scoped)."""
+    reports = _visible_reports(user)
+    if reports or not _is_admin(user):
         distribution = {}
         for level in CompetenceLevel:
             level_rows = [r for r in reports if (r.get("level") or "").lower() == level.value]
@@ -343,10 +453,10 @@ async def get_level_distribution():
 
 
 @router.get("/scores/step-analysis")
-async def get_step_analysis():
-    """Get average scores per visit step (persisted reports first)."""
-    reports = _report_rows()
-    if reports:
+async def get_step_analysis(user: Dict[str, Any] = Depends(get_current_user)):
+    """Get average scores per visit step (persisted reports first, scoped)."""
+    reports = _visible_reports(user)
+    if reports or not _is_admin(user):
         step_totals: Dict[str, List[float]] = {}
         for r in reports:
             for step, score in (r.get("step_scores") or {}).items():
@@ -380,13 +490,32 @@ async def get_step_analysis():
 
 
 @router.get("/sessions/{session_id}/report")
-async def get_session_report(session_id: str):
-    """Get the CRM report for a session."""
-    session = orchestrator.get_session(session_id)
-    if not session:
-        return {"error": "Session not found"}
+async def get_session_report(session_id: str, user: Dict[str, Any] = Depends(get_current_user)):
+    """Get the CRM report for one session.
 
-    # Find the CRM report in messages
+    Read from the reports persisted on disk first: the in-memory orchestrator
+    only knows the current process, so after a restart this used to answer
+    "not found" for every session that still had a perfectly good report on disk.
+    The lookup runs over the visible reports rather than the whole store, so the
+    same role-and-tenant scope as every other dashboard read applies here too —
+    a session outside it answers 404 rather than leaking that it exists.
+    """
+    for row in _visible_reports(user):
+        if row.get("session_id") != session_id:
+            continue
+
+        report = row.get("crm_report")
+        return report if isinstance(report, dict) else {"error": "CRM report not yet generated"}
+
+    # Fallback for a session that finished in this process but is not on disk yet.
+    session = orchestrator.get_session(session_id)
+
+    if not session:
+        raise HTTPException(status_code=404, detail="Session introuvable.")
+
+    if not _is_admin(user) and session.user_id != user.get("id"):
+        raise HTTPException(status_code=404, detail="Session introuvable.")
+
     for msg in reversed(session.messages):
         if "crm_report" in msg.metadata:
             return msg.metadata["crm_report"]

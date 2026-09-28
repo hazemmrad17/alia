@@ -8,7 +8,7 @@ import re
 from typing import List, Optional, Dict, Any
 from loguru import logger
 
-from app.config import get_settings
+from app.config import data_dir, get_settings
 
 settings = get_settings()
 
@@ -37,15 +37,8 @@ class RAGPipeline:
             return
 
         if HAS_CHROMA:
-            # Use persistent local storage by default
-            # Walk up from this file to find the backend/ directory
-            _this_dir = os.path.dirname(os.path.abspath(__file__))
-            _backend_dir = _this_dir
-            while _backend_dir != os.path.dirname(_backend_dir):
-                if os.path.exists(os.path.join(_backend_dir, "requirements.txt")):
-                    break
-                _backend_dir = os.path.dirname(_backend_dir)
-            persist_dir = os.path.join(_backend_dir, "data", "vector_store")
+            # Use persistent local storage by default, under the store directory
+            persist_dir = os.path.join(data_dir(), "vector_store")
             os.makedirs(persist_dir, exist_ok=True)
             self.chroma_client = chromadb.PersistentClient(path=persist_dir)
             logger.info(f"Using persistent ChromaDB at: {persist_dir}")
@@ -68,7 +61,7 @@ class RAGPipeline:
         document. Indexing whole files instead would dump a 170 KB blob into the
         prompt on the first hit.
         """
-        processed_dir = os.path.join(os.path.dirname(__file__), "..", "..", "data", "processed")
+        processed_dir = os.path.join(data_dir(), "processed")
         if not os.path.exists(processed_dir):
             logger.warning(f"No processed data directory at {processed_dir}; RAG fallback is empty")
             return

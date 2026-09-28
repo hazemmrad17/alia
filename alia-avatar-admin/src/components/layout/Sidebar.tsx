@@ -50,11 +50,12 @@ import {
 } from '@/components/ui/sidebar'
 
 // Config Imports
-import { delegateNavItems, commercialNavItems } from '@/configs/navConfig'
+import { adminNavItems, delegateNavItems, doctorNavItems } from '@/configs/navConfig'
 import themeConfig from '@/configs/themeConfig'
 
 // Util Imports
-import { clearStoredRole, resolveRole, ROLE_LABELS, type UserRole } from '@/lib/user-role'
+import { resolveRole, ROLE_LABELS, type UserRole } from '@/lib/user-role'
+import { ACCOUNT_ROLE_LABELS, getCurrentUser, signOut, workspaceFor, type AuthUser } from '@/lib/auth'
 import { cn } from '@/lib/utils'
 
 import { getNavApps } from '@/lib/nav-apps'
@@ -450,13 +451,23 @@ const SidebarLayout = () => {
   const router = useRouter()
   const { state, isMobile } = useSidebar()
 
-  // The active workspace decides which navbar renders. Role-specific pages win;
-  // shared pages (settings, history) keep the role the user chose last.
+  // The active workspace decides which navbar renders when nobody is signed in
+  // (signed out, or the first paint before the session is read): role-specific
+  // pages win, shared pages keep the role the user chose last.
   const [role, setRole] = useState<UserRole>(() => resolveRole(pathname))
 
   useEffect(() => {
     setRole(resolveRole(pathname))
   }, [pathname])
+
+  // The workspace name describes a navbar, not a person, so the account's own
+  // role is what names it once there is one — "Médecin / Pharmacien Workspace"
+  // rather than the generic label the signed-out fallback shows.
+  const [account, setAccount] = useState<AuthUser | null>(null)
+
+  useEffect(() => {
+    setAccount(getCurrentUser())
+  }, [])
 
   // Remove this state when the nav-apps API is removed. Until then, this state is used to hold the external nav-apps fetched from the API JSON.
   const [externalApps, setExternalApps] = useState<MenuItem[]>([])
@@ -490,17 +501,18 @@ const SidebarLayout = () => {
     }
   }, [])
 
-  // Nav groups rendered in the sidebar. Only the active workspace's items show.
+  // Nav groups rendered in the sidebar. For a signed-in account the role picks the
+  // navbar, NOT the URL: a doctor who opens a shared page must keep his own navbar,
+  // not inherit the platform one. Signed out, the workspace heuristic above applies.
   const navGroups = useMemo(() => {
-    const items = role === 'commercial' ? commercialNavItems : delegateNavItems
+    const workspace = account ? workspaceFor(account.role) : role
+    const items = workspace === 'delegate' ? delegateNavItems : workspace === 'doctor' ? doctorNavItems : adminNavItems
 
     // Remove the externalApps branch when the nav-apps API is removed. Until then, this is used to merge external nav-apps into the "Apps" group.
     return externalApps.length > 0
-      ? items.map(item =>
-          item.groupLabel === 'Apps' ? { ...item, items: item.items.concat(externalApps) } : item
-        )
+      ? items.map(item => (item.groupLabel === 'Apps' ? { ...item, items: item.items.concat(externalApps) } : item))
       : items
-  }, [role, externalApps])
+  }, [role, account, externalApps])
 
   const activeBranchKeys = useMemo(
     () => getActiveBranchKeys(navGroups, pathname, searchParams),
@@ -534,12 +546,12 @@ const SidebarLayout = () => {
               <img
                 src='/images/brands/vital-logo.png'
                 alt='VITAL Laboratoires'
-                className='size-10 shrink-0 self-center rounded-md border border-border bg-background object-contain p-0.5'
+                className='border-border bg-background size-10 shrink-0 self-center rounded-md border object-contain p-0.5'
               />
               <div className='flex flex-col items-start'>
                 <span className='text-lg font-semibold text-nowrap'>{themeConfig.templateName}</span>
-                <span className='text-xs font-light text-muted-foreground text-nowrap'>
-                  {ROLE_LABELS[role]} Workspace
+                <span className='text-muted-foreground text-xs font-light text-nowrap'>
+                  {account ? ACCOUNT_ROLE_LABELS[account.role] : ROLE_LABELS[role]} Workspace
                 </span>
               </div>
             </SidebarMenuButton>
@@ -567,12 +579,12 @@ const SidebarLayout = () => {
           <SidebarMenuItem>
             <SidebarMenuButton
               size='lg'
-              className='gap-2.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive [&>svg]:size-5'
+              className='text-muted-foreground hover:bg-destructive/10 hover:text-destructive gap-2.5 [&>svg]:size-5'
               onClick={() => {
-                clearStoredRole()
-                // "/" is now the marketing landing page, so send users back
-                // to the app's role picker instead.
-                router.push('/get-started')
+                // Ends the session, not just the workspace preference: this is
+                // the real sign-out now that accounts exist.
+                signOut()
+                router.push('/login')
               }}
             >
               <Icon.LogOut className='size-5' />

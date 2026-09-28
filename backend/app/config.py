@@ -1,6 +1,8 @@
 """ALIA Avatar Configuration"""
+import os
+
 from pydantic_settings import BaseSettings
-from typing import List
+from typing import List, Optional
 from functools import lru_cache
 
 
@@ -59,6 +61,32 @@ class Settings(BaseSettings):
     HEYGEN_API_KEY: str = ""
     HEYGEN_AVATAR_ID: str = ""
     
+    # Authentication
+    # Override JWT_SECRET in .env before anything is exposed publicly — tokens
+    # signed with a known secret can be forged by anyone.
+    JWT_SECRET: str = "alia-dev-secret-change-me"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 720
+    # Every account belongs to a tenant. One client today (VITAL); the column
+    # exists now so lab #2 is a config change instead of a migration.
+    DEFAULT_TENANT_ID: str = "vital"
+    # Starter accounts, created only when data/users.json does not exist yet.
+    AUTH_SEED_USERS: bool = True
+    AUTH_SEED_ADMIN_EMAIL: str = "admin@vital.tn"
+    AUTH_SEED_ADMIN_PASSWORD: str = "Alia@2026"
+    AUTH_SEED_DOCTOR_EMAIL: str = "doctor@vital.tn"
+    AUTH_SEED_DOCTOR_PASSWORD: str = "Alia@2026"
+    AUTH_SEED_DELEGATE_EMAIL: str = "delegate@vital.tn"
+    AUTH_SEED_DELEGATE_PASSWORD: str = "Alia@2026"
+
+    # ── Deprecated settings ──────────────────────────────────────────────
+    # The lab-side "manager" role was replaced by "doctor" — the persona who
+    # receives ALIA's product presentation (docs/11-user-story-doctor.md).
+    # These two names are declared only so an existing .env still boots:
+    # ``extra="forbid"`` would otherwise refuse to start the whole app over a
+    # setting nobody reads any more. Drop them once every .env is clean.
+    AUTH_SEED_MANAGER_EMAIL: Optional[str] = None
+    AUTH_SEED_MANAGER_PASSWORD: Optional[str] = None
+
     # ChromaDB
     CHROMA_HOST: str = "localhost"
     CHROMA_PORT: int = 8100
@@ -71,6 +99,12 @@ class Settings(BaseSettings):
     def DATABASE_URL(self) -> str:
         return f"{self.DB_DIALECT}://{self.DB_USERNAME}:{self.DB_PASSWORD}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_DATABASE}"
 
+    # ── Storage ──────────────────────────────────────────────────────────
+    # Every JSON store (accounts, teams, session reports) lives under one
+    # directory. It defaults to ``backend/data`` and is overridable so a test
+    # run can point at a scratch directory instead of the seeded demo data.
+    DATA_DIR: Optional[str] = None
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
@@ -79,3 +113,15 @@ class Settings(BaseSettings):
 @lru_cache()
 def get_settings() -> Settings:
     return Settings()
+
+
+def data_dir() -> str:
+    """Absolute path to the JSON store directory.
+
+    Read through the settings on every call rather than caching here: the
+    settings object itself is cached, and tests rewrite the value before the
+    app is imported.
+    """
+    configured = get_settings().DATA_DIR
+
+    return os.path.abspath(configured or os.path.join(os.path.dirname(__file__), "..", "data"))

@@ -20,6 +20,13 @@ import {
 import { Separator } from '@/components/ui/separator'
 import { SidebarTrigger } from '@/components/ui/sidebar'
 
+// An opaque id in the path (a session, a tournée) reads better as "Détail"
+// than as a raw UUID run through the title-caser.
+const OPAQUE_ID = /^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$/i
+
+const breadcrumbLabel = (segment: string): string =>
+  OPAQUE_ID.test(segment) ? 'Détail' : segment.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+
 const Header = () => {
   const pathname = usePathname()
 
@@ -35,7 +42,7 @@ const Header = () => {
             <BreadcrumbList>
               {segments.map((segment, index) => {
                 const isLast = index === segments.length - 1
-                const label = segment.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+                const label = breadcrumbLabel(segment)
                 const href = '/' + segments.slice(0, index + 1).join('/')
 
                 return (

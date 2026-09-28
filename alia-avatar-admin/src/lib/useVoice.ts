@@ -19,6 +19,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { authHeaders } from "@/lib/auth";
+
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 export type VoiceState = "idle" | "recording" | "transcribing" | "thinking" | "speaking";
@@ -524,7 +526,10 @@ export function useVoice({ sessionId, stream, send, onTranscript, onReply, onTok
 
     (async () => {
       try {
-        const res = await fetch(`${API_BASE}/api/v1/voice/status`, { signal: AbortSignal.timeout(5000) });
+        const res = await fetch(`${API_BASE}/api/v1/voice/status`, {
+          signal: AbortSignal.timeout(5000),
+          headers: authHeaders(),
+        });
 
         if (!res.ok) return;
         const data = (await res.json()) as VoiceProviders;
@@ -569,7 +574,11 @@ export function useVoice({ sessionId, stream, send, onTranscript, onReply, onTok
       if (m.style) form.append("style", m.style);
 
       try {
-        const res = await fetch(`${API_BASE}/api/v1/voice/turn`, { method: "POST", body: form });
+        const res = await fetch(`${API_BASE}/api/v1/voice/turn`, {
+          method: "POST",
+          body: form,
+          headers: authHeaders(),
+        });
 
         if (!res.ok) {
           const detail = await res.json().catch(() => null);
@@ -938,7 +947,7 @@ export function useVoice({ sessionId, stream, send, onTranscript, onReply, onTok
       try {
         const res = await fetch(`${API_BASE}/api/v1/voice/speak`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...authHeaders() },
           body: JSON.stringify({ text }),
           signal: controller.signal,
         });

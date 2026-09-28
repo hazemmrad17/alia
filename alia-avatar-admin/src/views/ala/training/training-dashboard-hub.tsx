@@ -15,10 +15,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import {
-  PlayCircle, Star, ChevronRight, RefreshCw, Zap, Timer, ChevronUp, ChevronDown,
+  Eye, Star, ChevronRight, ChevronLeft, RefreshCw, Zap, Timer, ChevronUp, ChevronDown,
   EllipsisVertical, Trophy, Sparkles, TicketCheck, BookMarked, TrendingUp,
   Users, Wallet, CreditCard, CircleDollarSign, Mail, MailOpen, MousePointerClick,
-  TriangleAlert, CircleOff, Check, Stethoscope
+  TriangleAlert, CircleOff, Check, Stethoscope, Lock
 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
@@ -26,7 +26,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
-import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import {
@@ -36,6 +35,12 @@ import { ChartContainer, ChartTooltip, ChartTooltipContent } from '@/components/
 import {
   Bar, BarChart, XAxis, YAxis, CartesianGrid, Area, AreaChart, LabelList, Cell
 } from 'recharts'
+
+// The milestone list lives with the full map, so this preview can never drift
+// from it (targets are on the backend's 0–10 evaluation scale).
+import { MILESTONES } from '@/views/ala/training/progression-path'
+
+import { cn } from '@/lib/utils'
 
 import { getSavedSessions } from '@/lib/alia-api'
 import type { SavedSession, SavedSessionsResponse } from '@/lib/alia-api'
@@ -47,6 +52,10 @@ const LEVEL_META_Typed = LEVEL_META as Record<string, { label?: string }>
 const FORMAT_LABELS: Record<string, string> = {
   flash: 'Flash', standard: 'Standard', approfondie: 'Approfondie'
 }
+
+const WEEKLY_GOAL = 3
+
+
 
 const AREA_CONFIG = { sessions: { label: 'Sessions', color: 'var(--chart-2)' } }
 const TIMELINE_CONFIG = { sessions: { label: 'Sessions' } }
@@ -86,6 +95,14 @@ function Ring({ pct, color }: { pct: number; color: string }) {
       <div className='absolute inset-0 flex items-center justify-center text-xs font-medium'>{Math.round(pct)}%</div>
     </div>
   )
+}
+
+function bestScoreOf(sessions: SavedSession[]): number | null {
+  let best: number | null = null
+  for (const s of sessions) {
+    if (typeof s.overall_score === 'number') best = Math.max(best ?? 0, s.overall_score)
+  }
+  return best
 }
 
 function TrendBadge({ delta }: { delta: number }) {
@@ -155,10 +172,17 @@ export default function TrainingDashboardHub() {
       if (s.completed_at) dayKeys.add(new Date(s.completed_at).toDateString())
     }
 
+    // Mini progression: milestones completed = best score reached each target.
+    const bestScore = bestScoreOf(sessions)
+    const completedCount = MILESTONES.filter(ms => (bestScore ?? 0) >= ms.target).length
+    const milestonePct = Math.round((completedCount / MILESTONES.length) * 100)
+    const totalXp = sessions.reduce((a, s) => a + (typeof s.overall_score === 'number' ? Math.round(s.overall_score) : 10), 0)
+
     return {
       total, avgRating, avgDuration, totalTime, thisWeek, weekDelta,
       feedbackPct, perLevel, areaData, bestSession, activeDays: dayKeys.size,
-      weekly: saved?.weekly ?? []
+      weekly: saved?.weekly ?? [],
+      completedCount, milestonePct, totalXp
     }
   }, [saved])
 
@@ -329,40 +353,62 @@ export default function TrainingDashboardHub() {
         </div>
       </Card>
 
-      {/* ── Row : Monthly campaign state (per-format) ── */}
+      {/* ── Mini progression card (condensed path preview + link to full view) ── */}
       <Card className='col-span-2 justify-between xl:col-span-1'>
         <CardHeader className='flex justify-between'>
           <div className='flex flex-col gap-1'>
-            <span className='text-lg font-semibold'>Répartition par format</span>
-            <span className='text-muted-foreground text-sm'>{m.total} session(s) au total</span>
+            <span className='text-lg font-semibold'>Progression</span>
+            <span className='text-muted-foreground text-sm'>
+              {m.completedCount} / {MILESTONES.length} jalons franchis
+            </span>
           </div>
           <Button variant='ghost' size='icon' className='text-muted-foreground rounded-full' aria-label='Menu'>
             <EllipsisVertical className='size-4' />
           </Button>
         </CardHeader>
         <CardContent className='flex flex-1 flex-col justify-between gap-4'>
-          {Object.entries(FORMAT_LABELS).map(([key, label], i) => {
-            const count = sessions.filter(s => s.visit_format === key).length
-            const pct = m.total ? Math.round((count / m.total) * 100) : 0
-            const Icon = [Mail, MailOpen, MousePointerClick][i] ?? Mail
-            const cls = ['bg-chart-1/10 text-chart-1', 'bg-chart-2/10 text-chart-2', 'bg-chart-3/10 text-chart-3'][i]
-            return (
-              <div key={key} className='flex items-center justify-between gap-2'>
-                <div className='flex items-center gap-2'>
-                  <Avatar className='size-8 rounded-sm'>
-                    <AvatarFallback className={`shrink-0 rounded-sm *:size-4 ${cls}`}>
-                      <Icon />
-                    </AvatarFallback>
-                  </Avatar>
-                  <span className='text-base font-medium'>{label}</span>
+          {/* Condensed milestone dots connected by a line */}
+          <div className='relative flex items-center justify-between px-1 py-2'>
+            <div className='bg-muted absolute right-4 left-4 h-1 rounded-full' aria-hidden />
+            <div
+              className='bg-primary absolute left-4 h-1 rounded-full transition-all'
+              style={{ width: `calc(${m.milestonePct}% - ${(m.milestonePct / 100) * 32 - 8}px)` }}
+              aria-hidden
+            />
+            {MILESTONES.map((ms, i) => {
+              const done = i < m.completedCount
+              const current = i === m.completedCount
+              return (
+                <div
+                  key={ms.id}
+                  title={`${ms.label} — objectif ${ms.target.toFixed(1).replace('.', ',')}/10`}
+                  className={cn(
+                    'relative z-10 flex size-6 items-center justify-center rounded-full border-2',
+                    done && 'border-primary bg-primary text-primary-foreground',
+                    current && 'border-amber-400 bg-amber-400 text-amber-950 animate-pulse',
+                    !done && !current && 'border-border bg-background text-muted-foreground'
+                  )}
+                >
+                  {done ? <Check className='size-3.5' strokeWidth={3} /> : current ? <Zap className='size-3.5' /> : <Lock className='size-3' />}
                 </div>
-                <div className='flex items-center gap-2 text-sm'>
-                  <span className='text-muted-foreground'>{count}</span>
-                  <span>{pct}%</span>
-                </div>
-              </div>
-            )
-          })}
+              )
+            })}
+          </div>
+          <div className='flex items-center justify-between text-sm'>
+            <span className='text-muted-foreground'>
+              {m.milestonePct}% du parcours
+            </span>
+            <Badge className='bg-primary/10 h-6 rounded-sm px-3 py-1 text-primary'>
+              <Zap className='size-3.5' /> {m.totalXp.toLocaleString('fr-FR')} XP
+            </Badge>
+          </div>
+          <Button
+            variant='outline'
+            className='h-10 w-full gap-2'
+            onClick={() => window.location.href = '/dashboard/progression'}
+          >
+            Voir le parcours détaillé <ChevronRight className='size-4' />
+          </Button>
         </CardContent>
       </Card>
 
@@ -425,54 +471,87 @@ export default function TrainingDashboardHub() {
         </CardContent>
       </Card>
 
-      {/* ── Launch plan card (the "For Business Shark" checkbox card) ── */}
+      {/* ── Weekly goal card (replaces the launcher card — the stepper already handles level/profile selection) ── */}
       <Card className='col-span-2 justify-between gap-4 xl:col-span-1'>
         <CardHeader>
           <div className='flex items-center justify-between gap-2'>
-            <span className='text-lg font-semibold'>Prêt pour une nouvelle visite ?</span>
+            <span className='text-lg font-semibold'>Objectif hebdomadaire</span>
             <Button variant='ghost' size='icon' className='text-muted-foreground rounded-full' aria-label='Menu'>
               <EllipsisVertical className='size-4' />
             </Button>
           </div>
           <p className='text-muted-foreground text-sm'>
-            Choisissez le niveau et le profil du médecin, puis lancez la simulation en situation réelle.
+            Restez régulier : chaque session vous rapproche de votre objectif de la semaine.
           </p>
         </CardHeader>
-        <CardContent className='space-y-2'>
-          <Label className='text-base font-medium'>Format de visite</Label>
-          {Object.entries(FORMAT_LABELS).map(([key, label], i) => {
-            const durations: Record<string, string> = { flash: '2 min', standard: '4 min', approfondie: '8 min' }
-            return (
-              <Link key={key} href='/simulation' className='block'>
-                <div className='flex cursor-pointer items-center gap-3 rounded-md border px-4 py-2 transition-colors hover:border-primary'>
-                  <Checkbox checked={i === 0} readOnly aria-readonly />
-                  <div className='flex w-full items-center justify-between gap-2'>
-                    <p className='text-sm leading-none font-medium'>{label}</p>
-                    <Badge className='bg-primary/10 h-6 rounded-sm px-3 py-1 text-primary'>
-                      {durations[key]}
-                    </Badge>
-                  </div>
-                </div>
-              </Link>
-            )
-          })}
-        </CardContent>
-        <CardContent className='flex flex-col gap-2'>
-          <div className='flex items-center justify-between text-sm'>
-            <span>Note moyenne</span>
-            <span>{m.avgRating != null ? `${m.avgRating.toFixed(1)} / 5` : '—'}</span>
-          </div>
-          <div className='flex items-center justify-between'>
-            <span className='text-sm'>Sessions terminées</span>
-            <span className='text-lg font-medium'>{m.total}</span>
+        <CardContent>
+          <div className='bg-primary/10 flex items-center justify-between gap-2 rounded-md px-2 py-1.5'>
+            <div className='flex items-center gap-2'>
+              <Avatar className='size-9 rounded-sm after:rounded-[inherit]'>
+                <AvatarFallback className='bg-background text-primary shrink-0'>
+                  <Zap className='size-6' />
+                </AvatarFallback>
+              </Avatar>
+              <div className='flex flex-col'>
+                <span className='text-base font-medium'>{m.thisWeek} / {WEEKLY_GOAL} sessions</span>
+                <span className='text-muted-foreground text-sm'>Cette semaine</span>
+              </div>
+            </div>
+            <div className='flex items-baseline'>
+              <span className='text-xl font-medium'>
+                {Math.min(100, Math.round((m.thisWeek / WEEKLY_GOAL) * 100))}%
+              </span>
+            </div>
           </div>
         </CardContent>
         <CardContent>
-          <Link href='/simulation'>
-            <Button className='h-10 w-full gap-2'>
-              <PlayCircle className='size-5' /> Lancer une simulation
-            </Button>
-          </Link>
+          <div className='flex flex-col gap-4'>
+            <span className='text-base font-semibold'>Cette semaine</span>
+            <div className='flex flex-col gap-3'>
+              <div className='flex items-center justify-between gap-2'>
+                <div className='flex flex-col gap-0.5'>
+                  <span className='text-sm font-medium'>Progression</span>
+                  <div className='bg-muted mt-1 h-1.5 w-full max-w-48 overflow-hidden rounded-full'>
+                    <div
+                      className='bg-primary h-full transition-all'
+                      style={{ width: `${Math.min(100, (m.thisWeek / WEEKLY_GOAL) * 100)}%` }}
+                    />
+                  </div>
+                </div>
+                <span className='text-muted-foreground shrink-0 text-xs'>
+                  {Math.max(0, WEEKLY_GOAL - m.thisWeek)} restante{WEEKLY_GOAL - m.thisWeek > 1 ? 's' : ''}
+                </span>
+              </div>
+              <div className='flex items-center justify-between gap-2'>
+                <div className='flex items-center gap-2'>
+                  <div className='bg-muted rounded-sm p-2'>
+                    <TrendingUp className='text-primary size-5' />
+                  </div>
+                  <div className='flex flex-col gap-0.5'>
+                    <span className='text-sm font-medium'>Vs semaine passée</span>
+                    <span className='text-muted-foreground text-xs'>Évolution d&apos;activité</span>
+                  </div>
+                </div>
+                <Badge className='bg-primary/10 h-6 rounded-sm px-3 py-1 text-primary'>
+                  {m.weekDelta >= 0 ? '+' : ''}{m.weekDelta}%
+                </Badge>
+              </div>
+              <div className='flex items-center justify-between gap-2'>
+                <div className='flex items-center gap-2'>
+                  <div className='bg-muted rounded-sm px-2 py-3'>
+                    <Trophy className='text-primary size-5' />
+                  </div>
+                  <div className='flex flex-col gap-0.5'>
+                    <span className='text-sm font-medium'>Note moyenne</span>
+                    <span className='text-muted-foreground text-xs'>Sur toutes les sessions</span>
+                  </div>
+                </div>
+                <span className='text-muted-foreground text-sm'>
+                  {m.avgRating != null ? `${m.avgRating.toFixed(1)} / 5` : '—'}
+                </span>
+              </div>
+            </div>
+          </div>
         </CardContent>
       </Card>
 
@@ -577,7 +656,8 @@ export default function TrainingDashboardHub() {
                       <TableHead>Profil médecin</TableHead>
                       <TableHead>Format</TableHead>
                       <TableHead>Durée</TableHead>
-                      <TableHead className='pr-6 text-center'>Votre note</TableHead>
+                      <TableHead className='text-center'>Votre note</TableHead>
+                      <TableHead className='pr-6 text-end'>Évaluation</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -594,7 +674,19 @@ export default function TrainingDashboardHub() {
                           <TableCell className='text-sm capitalize'>{s.doctor_style}</TableCell>
                           <TableCell className='text-sm'>{FORMAT_LABELS[s.visit_format] ?? s.visit_format}</TableCell>
                           <TableCell className='whitespace-nowrap text-sm tabular-nums'>{fmtDuration(s.duration_seconds)}</TableCell>
-                          <TableCell className='pr-6 text-center'><Stars value={s.rating} /></TableCell>
+                          <TableCell className='text-center'><Stars value={s.rating} /></TableCell>
+                          <TableCell className='pr-6 text-end'>
+                            {/* Opens the full review: scores, steps, transcript, visit report. */}
+                            <Button
+                              variant='outline'
+                              size='sm'
+                              className='gap-1.5'
+                              nativeButton={false}
+                              render={<Link href={`/dashboard/training/sessions/${s.session_id}`} />}
+                            >
+                              <Eye className='size-3.5' /> Détail
+                            </Button>
+                          </TableCell>
                         </TableRow>
                       )
                     })}

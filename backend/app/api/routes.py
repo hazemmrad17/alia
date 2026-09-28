@@ -3,11 +3,15 @@ ALIA Avatar - Core API Routes
 """
 import json
 import os
+from typing import Any, Dict
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from typing import List, Optional
 from loguru import logger
+
+from app.auth.deps import get_current_user
+from app.config import data_dir
 
 from app.models.schemas import (
     StartSessionRequest,
@@ -23,8 +27,13 @@ router = APIRouter(tags=["alia"])
 
 
 @router.post("/session/start", response_model=StartSessionResponse)
-async def start_session(request: StartSessionRequest):
-    """Start a new ALIA conversation session."""
+async def start_session(request: StartSessionRequest, user: Dict[str, Any] = Depends(get_current_user)):
+    """Start a new ALIA conversation session.
+
+    The session belongs to the authenticated account: any client-sent user_id is
+    ignored so a session can never be misattributed by the caller.
+    """
+    request.user_id = user["id"]
     try:
         response = await orchestrator.start_session(request)
         return response
@@ -34,7 +43,7 @@ async def start_session(request: StartSessionRequest):
 
 
 @router.post("/session/start/stream")
-async def start_session_stream(request: StartSessionRequest):
+async def start_session_stream(request: StartSessionRequest, user: Dict[str, Any] = Depends(get_current_user)):
     """Start a session and stream the LLM greeting token by token.
 
     NDJSON frames:
@@ -49,6 +58,7 @@ async def start_session_stream(request: StartSessionRequest):
     async def body():
         # Reuse start_session for all the defaults/bookkeeping, then stream
         # the greeting directly from the LLM (true token stream, no replay).
+        request.user_id = user["id"]
         try:
             response = await orchestrator.start_session(request)
         except Exception as e:  # noqa: BLE001
@@ -94,8 +104,19 @@ async def start_session_stream(request: StartSessionRequest):
 
 
 @router.post("/chat", response_model=ConversationResponse)
-async def chat(request: ConversationRequest):
-    """Send a message to ALIA and receive a response."""
+async def chat(request: ConversationRequest, user: Dict[str, Any] = Depends(get_current_user)):
+    """Send a message to ALIA and receive a response.
+
+    Authenticated, and scoped to the session's owner: a session that belongs to
+    another account answers 404 rather than driving someone else's conversation.
+    The check only applies while the session is in memory, which is the only
+    place a conversation can advance from in the first place.
+    """
+    session = orchestrator.sessions.get(request.session_id or "")
+
+    if session and session.user_id != user["id"]:
+        raise HTTPException(status_code=404, detail="Session introuvable.")
+
     try:
         response = await orchestrator.send_message(request)
         return response
@@ -145,10 +166,11 @@ class SessionComplete(BaseModel):
     doctor_style: Optional[str] = None
     product_focus: Optional[str] = None
     messages: Optional[int] = None
+    mode: Optional[str] = None
 
 
 @router.post("/session/{session_id}/complete")
-async def complete_session(session_id: str, payload: Optional[SessionComplete] = None):
+async def complete_session(session_id: str, payload: Optional[SessionComplete] = None, user: Dict[str, Any] = Depends(get_current_user)):
     """Close the session and persist the PRIVATE evaluation for the admin.
 
     The trainee never sees this report — it is written to disk so a manager
@@ -162,9 +184,7 @@ async def complete_session(session_id: str, payload: Optional[SessionComplete] =
         flow = orchestrator.flows.get(session_id)
         info = payload or SessionComplete()
 
-        path = os.path.abspath(
-            os.path.join(os.path.dirname(__file__), "..", "..", "data", "session_reports.json")
-        )
+        path = os.path.join(data_dir(), "session_reports.json")
         records = []
         if os.path.exists(path):
             try:
@@ -188,23 +208,40 @@ async def complete_session(session_id: str, payload: Optional[SessionComplete] =
             duration = info.duration_seconds if info.duration_seconds is not None else 0.0
             crm.duration_seconds = int(round(float(duration)))
 
+            mode = _val(session.mode)
+
+            # A commercial presentation is not a graded exercise. The visit
+            # report is the artefact, so the row is kept and the competence
+            # fields are not: the doctor is never scored, and training averages
+            # stay training instead of absorbing presentations. Scoring still
+            # runs underneath because the report's engagement and next-step
+            # read from it.
+            is_presentation = mode == "commercial"
+
             record = {
                 "session_id": session_id,
+                # Identity comes from the session, stamped at start; the caller
+                # is the fallback for a session created before that stamping.
+                "user_id": session.user_id or user["id"],
+                "tenant_id": user.get("tenant_id"),
+                "mode": mode,
                 "level": _val(session.level),
                 "visit_format": _val(session.visit_format),
                 "doctor_style": _val(getattr(session.doctor_profile, "style", None)),
                 "product_focus": session.product_focus,
-                "overall_score": scoring.overall_score,
-                "step_scores": scoring.step_scores,
-                "strengths": scoring.strengths,
-                "areas_for_improvement": scoring.areas_for_improvement,
-                "level_progression": scoring.level_progression,
+                "overall_score": None if is_presentation else scoring.overall_score,
+                "step_scores": {} if is_presentation else scoring.step_scores,
+                "strengths": [] if is_presentation else scoring.strengths,
+                "areas_for_improvement": [] if is_presentation else scoring.areas_for_improvement,
+                "level_progression": None if is_presentation else scoring.level_progression,
                 "crm_report": crm.model_dump(),
                 "messages": len(session.messages),
                 "duration_seconds": round(float(duration), 1),
                 "completed_at": session.ended_at.isoformat(timespec="seconds"),
+                "unscored": is_presentation,
             }
-            logger.info(f"Private report saved for session {session_id} (score {scoring.overall_score}/10)")
+            kind = "Visit report" if is_presentation else "Private report"
+            logger.info(f"{kind} saved for session {session_id} (mode {mode})")
         else:
             # The visit outlived the process that created it. Keep whatever the
             # client reports so the dashboard still counts it (no scoring).
@@ -212,6 +249,11 @@ async def complete_session(session_id: str, payload: Optional[SessionComplete] =
                 raise HTTPException(status_code=404, detail="Session not found")
             record = {
                 "session_id": session_id,
+                # The session is gone from memory, so identity comes from the
+                # signed-in caller — the endpoint is auth-guarded.
+                "user_id": user["id"],
+                "tenant_id": user.get("tenant_id"),
+                "mode": info.mode or "training",
                 "level": info.level,
                 "visit_format": info.visit_format,
                 "doctor_style": info.doctor_style,
@@ -238,6 +280,16 @@ async def complete_session(session_id: str, payload: Optional[SessionComplete] =
         with open(path, "w", encoding="utf-8") as f:
             json.dump(records, f, ensure_ascii=False, indent=2)
 
+        # Loyalty: a completed commercial pitch the doctor received earns
+        # Vital Points (idempotent per session — a resent completion does not
+        # double-credit). Failures must not break the completion itself.
+        try:
+            if record.get("mode") == "commercial" and record.get("unscored"):
+                from app.api.rewards import grant_pitch_points
+                grant_pitch_points(str(record.get("user_id") or ""), str(record.get("tenant_id") or ""), session_id)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Rewards grant skipped for {session_id}: {e}")
+
         # Only the confirmation goes back to the client — never the scores.
         return {"saved": True, "session_id": session_id, "scored": not record.get("unscored", False)}
     except HTTPException:
@@ -253,8 +305,7 @@ async def save_session_feedback(session_id: str, feedback: SessionFeedback):
     import os
     from datetime import datetime
 
-    path = os.path.join(os.path.dirname(__file__), "..", "..", "data", "session_feedback.json")
-    path = os.path.abspath(path)
+    path = os.path.join(data_dir(), "session_feedback.json")
     records = []
     if os.path.exists(path):
         try:
@@ -278,6 +329,21 @@ async def save_session_feedback(session_id: str, feedback: SessionFeedback):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(records, f, ensure_ascii=False, indent=2)
 
+    # Loyalty: feedback about a received visit earns points too (once per
+    # session), attributed to the doctor the visit report belongs to.
+    try:
+        from app.api.rewards import grant_feedback_points
+        reports_path = os.path.join(data_dir(), "session_reports.json")
+        reports = []
+        if os.path.exists(reports_path):
+            with open(reports_path, "r", encoding="utf-8") as f:
+                reports = json.load(f)
+        report = next((r for r in reports if r.get("session_id") == session_id), None)
+        if report:
+            grant_feedback_points(str(report.get("user_id") or ""), str(report.get("tenant_id") or ""), session_id)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"Feedback rewards skipped for {session_id}: {e}")
+
     logger.info(f"Feedback saved for session {session_id}: {feedback.rating}/5")
     return {"saved": True, "session_id": session_id, "total_feedback": len(records)}
 
@@ -288,9 +354,7 @@ async def save_session_feedback(session_id: str, feedback: SessionFeedback):
 # anyone testing ALIA) sends while troubleshooting.
 
 def _support_reports_path() -> str:
-    return os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "..", "data", "support_reports.json")
-    )
+    return os.path.join(data_dir(), "support_reports.json")
 
 
 def _load_support_reports() -> list:
@@ -387,7 +451,7 @@ async def advance_session_step(session_id: str, body: dict = None):
 
 
 @router.post("/chat/stream")
-async def chat_stream(request: ConversationRequest):
+async def chat_stream(request: ConversationRequest, user: Dict[str, Any] = Depends(get_current_user)):
     """Send a message to ALIA and stream the reply token by token.
 
     The body is a newline-delimited JSON stream:
@@ -395,8 +459,16 @@ async def chat_stream(request: ConversationRequest):
       {"type":"token","value":"jour"}
       ...
       {"type":"reply_end","interrupted":false,"current_step":"introduction"}
+
+    Authenticated and owner-scoped like /chat: a stream cannot be opened on
+    another account's session.
     """
     from fastapi.responses import StreamingResponse
+
+    session = orchestrator.sessions.get(request.session_id or "")
+
+    if session and session.user_id != user["id"]:
+        raise HTTPException(status_code=404, detail="Session introuvable.")
 
     async def body():
         pieces: list[str] = []
@@ -453,7 +525,7 @@ async def list_sessions():
 async def list_products():
     """List all available products from the catalog."""
     import json, os
-    data_path = os.path.join(os.path.dirname(__file__), "..", "..", "data", "processed", "products_llm.json")
+    data_path = os.path.join(data_dir(), "processed", "products_llm.json")
     if os.path.exists(data_path):
         with open(data_path, "r", encoding="utf-8") as f:
             products = json.load(f)
@@ -540,4 +612,509 @@ async def list_visit_formats():
                 "steps": ["introduction", "sondage", "synthese", "objections", "argumentation", "conclusion"],
             },
         ],
+    }
+
+
+# ── L'équipe: the admin–delegate relationship ─────────────────────────────────
+
+class TeamAssignInput(BaseModel):
+    delegate_id: str
+
+
+class LevelChangeInput(BaseModel):
+    level: str
+
+
+@router.get("/team")
+async def get_team(user: Dict[str, Any] = Depends(get_current_user)):
+    """The signed-in admin's delegates, with each one's latest session summary.
+
+    A delegate sees their own assignment mirrored back; everyone else is 403 —
+    the roster is a management concern, exactly like the account list.
+    """
+    from app.auth import store, team
+
+    if user["role"] == "delegate":
+        manager_id = team.manager_of(user["id"])
+        manager = store.get_user(manager_id) if manager_id else None
+        me = store.public_user(user)
+        me["current_level"] = team.current_level_of(user["id"])
+        return {
+            "manager": store.public_user(manager) if manager else None,
+            "delegates": [me],
+        }
+
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Votre rôle ne permet pas cette action.")
+
+    delegates = []
+
+    for delegate_id in team.delegates_of(user["id"]):
+        delegate = store.get_user(delegate_id)
+
+        if not delegate:
+            continue
+
+        # A manager only ever sees their own tenant's team, even if an
+        # assignment row names someone outside it.
+        if not store.same_tenant(delegate.get("tenant_id"), user.get("tenant_id")):
+            continue
+
+        delegates.append(
+            {
+                **store.public_user(delegate),
+                "current_level": team.current_level_of(delegate_id),
+                "level_history": team.level_history_of(delegate_id),
+                "assigned_at": team.assigned_at(delegate_id),
+                **_delegate_trace(delegate_id),
+            }
+        )
+
+    return {"manager": None, "delegates": delegates}
+
+
+@router.post("/team/{delegate_id}/promote")
+async def promote_delegate(
+    delegate_id: str,
+    payload: LevelChangeInput,
+    user: Dict[str, Any] = Depends(get_current_user),
+):
+    """Grant a delegate a new certified level, on the record. Admin-only.
+
+    Promotion is a decision, not a formula: the level list gives a threshold, but
+    autonomy and compliance are a human judgement, so an admin grants the level
+    explicitly and the change is appended to an audit trail — who, when, and from
+    which level. Only a delegate of the calling admin can be promoted.
+    """
+    from app.auth import store, team
+
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Votre rôle ne permet pas cette action.")
+
+    if team.manager_of(delegate_id) != user["id"]:
+        raise HTTPException(status_code=404, detail="Ce délégué n'est pas dans votre équipe.")
+
+    delegate = store.get_user(delegate_id)
+
+    if not delegate:
+        raise HTTPException(status_code=404, detail="Compte introuvable.")
+
+    if not store.same_tenant(delegate.get("tenant_id"), user.get("tenant_id")):
+        raise HTTPException(status_code=404, detail="Ce délégué n'est pas dans votre équipe.")
+
+    target = (payload.level or "").strip().lower()
+
+    if target not in team.LEVEL_ORDER:
+        raise HTTPException(status_code=400, detail="Niveau inconnu.")
+
+    if team.current_level_of(delegate_id) == target:
+        raise HTTPException(status_code=400, detail="Ce délégué est déjà à ce niveau.")
+
+    change = team.record_level_change(delegate_id, target, changed_by=user["id"])
+    logger.info(f"Delegate {delegate_id} promoted to {target} by admin {user['id']}")
+
+    return {
+        "change": change,
+        "delegate": {
+            **store.public_user(delegate),
+            "current_level": target,
+            "level_history": team.level_history_of(delegate_id),
+        },
+    }
+
+
+@router.post("/team")
+async def assign_to_team(payload: TeamAssignInput, user: Dict[str, Any] = Depends(get_current_user)):
+    """Put a delegate under the signed-in admin. Admin-only, re-assigning is a move."""
+    from app.auth import store, team
+
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Votre rôle ne permet pas cette action.")
+
+    delegate = store.get_user(payload.delegate_id)
+
+    if not delegate:
+        raise HTTPException(status_code=404, detail="Compte introuvable.")
+
+    if delegate["role"] != "delegate":
+        raise HTTPException(status_code=400, detail="Seul un délégué médical peut être affecté à une équipe.")
+
+    # 404, not 403: an account in another tenant should look absent, not
+    # "off limits", so this cannot be used to probe who exists elsewhere.
+    if not store.same_tenant(delegate.get("tenant_id"), user.get("tenant_id")):
+        raise HTTPException(status_code=404, detail="Compte introuvable.")
+
+    record = team.assign(
+        payload.delegate_id,
+        user["id"],
+        assigned_by=user["id"],
+        tenant_id=user.get("tenant_id"),
+    )
+    logger.info(f"Delegate {payload.delegate_id} assigned to admin {user['id']}")
+
+    return {"assignment": record, "delegate": store.public_user(delegate)}
+
+
+@router.delete("/team/{delegate_id}")
+async def remove_from_team(delegate_id: str, user: Dict[str, Any] = Depends(get_current_user)):
+    """Release a delegate from their manager. Admin-only; must be their own delegate."""
+    from app.auth import team
+
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Votre rôle ne permet pas cette action.")
+
+    if team.manager_of(delegate_id) != user["id"]:
+        raise HTTPException(status_code=404, detail="Ce délégué n'est pas dans votre équipe.")
+
+    removed = team.unassign(delegate_id)
+
+    if not removed:
+        raise HTTPException(status_code=404, detail="Ce délégué n'est pas dans votre équipe.")
+
+    logger.info(f"Delegate {delegate_id} released by admin {user['id']}")
+
+    return {"removed": True}
+
+
+@router.get("/team/sessions")
+async def list_team_sessions(
+    delegate: Optional[str] = Query(default=None, description="Restrict the log to one delegate id."),
+    level: Optional[str] = Query(default=None, description="Filter by the level the session was played at."),
+    visit_format: Optional[str] = Query(default=None, description="Filter by visit format."),
+    since: Optional[str] = Query(default=None, description="ISO date — sessions completed on or after it."),
+    limit: int = Query(default=100, ge=1, le=500),
+    user: Dict[str, Any] = Depends(get_current_user),
+):
+    """The admin's team session log: every finished session of their delegates.
+
+    This is the per-person counterpart to /dashboard/saved-sessions. That
+    endpoint stays anonymous on purpose — it backs pages a delegate may read,
+    so widening it would have leaked identity (and, with include_scores, the
+    evaluations) to anyone who asked. Identity-scoped reading therefore lives
+    here instead, behind the admin guard, and returns the evaluation fields
+    because its only audience is the manager.
+
+    Scope is strictly the admin's own delegates: a session belonging to an
+    unassigned delegate, or to the admin themselves, is not in this log.
+    """
+    from app.api.dashboard import _parse_iso, _report_rows, _row_duration, _row_product
+    from app.auth import store, team
+
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Votre rôle ne permet pas cette action.")
+
+    roster = {}
+
+    for delegate_id in team.delegates_of(user["id"]):
+        record = store.get_user(delegate_id)
+
+        if record and store.same_tenant(record.get("tenant_id"), user.get("tenant_id")):
+            roster[delegate_id] = {
+                "id": delegate_id,
+                "full_name": record.get("full_name"),
+                "email": record.get("email"),
+                "is_active": record.get("is_active", True),
+                "current_level": team.current_level_of(delegate_id),
+                "assigned_at": team.assigned_at(delegate_id),
+                **_delegate_trace(delegate_id),
+            }
+
+    if delegate:
+        if delegate not in roster:
+            raise HTTPException(status_code=404, detail="Ce délégué n'est pas dans votre équipe.")
+        roster = {delegate: roster[delegate]}
+
+    since_dt = _parse_iso(since)
+    sessions: List[Dict[str, Any]] = []
+
+    for row in _report_rows():
+        # Presentations do not belong in the training log: the manager reads
+        # competence here, and a doctor's visit report is a different object.
+        if (row.get("mode") or "training") != "training":
+            continue
+
+        user_id = row.get("user_id")
+
+        if user_id not in roster:
+            continue
+
+        if level and (row.get("level") or "").lower() != level.lower():
+            continue
+
+        if visit_format and (row.get("visit_format") or "").lower() != visit_format.lower():
+            continue
+
+        completed = _parse_iso(row.get("completed_at"))
+
+        if since_dt and (not completed or completed < since_dt):
+            continue
+
+        sessions.append(
+            {
+                "session_id": row.get("session_id"),
+                "user_id": user_id,
+                "user_name": roster[user_id]["full_name"],
+                "mode": "training",
+                "level": row.get("level"),
+                "visit_format": row.get("visit_format"),
+                "doctor_style": row.get("doctor_style"),
+                "product_focus": _row_product(row),
+                "messages": row.get("messages", 0),
+                "duration_seconds": round(_row_duration(row)),
+                "completed_at": row.get("completed_at"),
+                "overall_score": row.get("overall_score"),
+                "step_scores": row.get("step_scores", {}),
+                "level_progression": row.get("level_progression"),
+            }
+        )
+
+    sessions.sort(key=lambda s: s.get("completed_at") or "", reverse=True)
+
+    return {
+        "total": len(sessions),
+        "delegates": list(roster.values()),
+        "filters": {"delegate": delegate, "level": level, "visit_format": visit_format, "since": since},
+        "sessions": sessions[:limit],
+    }
+
+
+# ── Les médecins: the admin–doctor relationship ────────────────────────────────
+#
+# The same shape as the team, for the other audience. A doctor is not scored and
+# has no level ladder (docs/11-user-story-doctor.md: "Scoring: No", "Levels:
+# None"), so the manager's questions are different ones: who is this doctor, and
+# what was presented to him.
+
+
+class DoctorAssignInput(BaseModel):
+    doctor_id: str
+
+
+def _named(user_id: Optional[str]) -> Optional[str]:
+    """The full name behind an id, or None when the account is gone.
+
+    An id alone is not an answer to "whose list was this doctor on before"; the
+    reader is an admin looking at a roster, not a database.
+    """
+    from app.auth import store
+
+    if not user_id:
+        return None
+
+    record = store.get_user(user_id)
+
+    return record.get("full_name") if record else None
+
+
+def _delegate_trace(delegate_id: str) -> Dict[str, Any]:
+    """The handover trace of a delegate's assignment, for the team roster."""
+    from app.auth import team
+
+    previous = team.previous_manager_of(delegate_id)
+
+    return {
+        "previous_manager_id": previous,
+        "previous_manager_name": _named(previous),
+        "assigned_by_name": _named(team.assigned_by_of(delegate_id)),
+    }
+
+
+def _doctor_trace(doctor_id: str) -> Dict[str, Any]:
+    """The handover trace of a doctor's assignment, for the doctor roster."""
+    from app.auth import team
+
+    previous = team.previous_manager_of_doctor(doctor_id)
+
+    return {
+        "previous_manager_id": previous,
+        "previous_manager_name": _named(previous),
+        "assigned_by_name": _named(team.doctor_assigned_by(doctor_id)),
+    }
+
+
+def _doctor_profile(record: Dict[str, Any]) -> Dict[str, Any]:
+    """The doctor fields a manager cares about, without the account plumbing."""
+    return {
+        "id": record["id"],
+        "full_name": record.get("full_name"),
+        "email": record.get("email"),
+        "specialty": record.get("specialty"),
+        "city": record.get("city"),
+        "is_active": record.get("is_active", True),
+    }
+
+
+def _doctor_roster(manager: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """The admin's doctors, tenant-filtered, keyed by id."""
+    from app.auth import store, team
+
+    roster: Dict[str, Dict[str, Any]] = {}
+
+    for doctor_id in team.doctors_of(manager["id"]):
+        record = store.get_user(doctor_id)
+
+        if not record or not store.same_tenant(record.get("tenant_id"), manager.get("tenant_id")):
+            continue
+
+        roster[doctor_id] = {
+            **_doctor_profile(record),
+            "assigned_at": team.doctor_assigned_at(doctor_id),
+            **_doctor_trace(doctor_id),
+        }
+
+    return roster
+
+
+@router.get("/doctors")
+async def get_doctors(user: Dict[str, Any] = Depends(get_current_user)):
+    """The signed-in admin's doctors; a doctor sees their manager mirrored back.
+
+    The doctor counterpart of /team: same relationship, other audience. A doctor
+    is never scored, so what the manager needs is the practice (specialty, city)
+    and what was presented — not a competence.
+    """
+    from app.auth import store, team
+
+    if user["role"] == "doctor":
+        manager_id = team.manager_of_doctor(user["id"])
+        manager = store.get_user(manager_id) if manager_id else None
+        return {"manager": store.public_user(manager) if manager else None, "doctors": [store.public_user(user)]}
+
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Votre rôle ne permet pas cette action.")
+
+    return {"manager": None, "doctors": list(_doctor_roster(user).values())}
+
+
+@router.post("/doctors")
+async def assign_doctor(payload: DoctorAssignInput, user: Dict[str, Any] = Depends(get_current_user)):
+    """Put a doctor under the signed-in admin. Admin-only; re-assigning moves."""
+    from app.auth import store, team
+
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Votre rôle ne permet pas cette action.")
+
+    doctor = store.get_user(payload.doctor_id)
+
+    if not doctor:
+        raise HTTPException(status_code=404, detail="Compte introuvable.")
+
+    if doctor["role"] != "doctor":
+        raise HTTPException(status_code=400, detail="Seul un médecin ou pharmacien peut être suivi ici.")
+
+    # 404, not 403: an account in another tenant should look absent.
+    if not store.same_tenant(doctor.get("tenant_id"), user.get("tenant_id")):
+        raise HTTPException(status_code=404, detail="Compte introuvable.")
+
+    record = team.assign_doctor(
+        payload.doctor_id,
+        user["id"],
+        assigned_by=user["id"],
+        tenant_id=user.get("tenant_id"),
+    )
+    logger.info(f"Doctor {payload.doctor_id} assigned to admin {user['id']}")
+
+    return {"assignment": record, "doctor": store.public_user(doctor)}
+
+
+@router.delete("/doctors/{doctor_id}")
+async def remove_doctor(doctor_id: str, user: Dict[str, Any] = Depends(get_current_user)):
+    """Release a doctor from their manager. Admin-only; must be their own."""
+    from app.auth import team
+
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Votre rôle ne permet pas cette action.")
+
+    if team.manager_of_doctor(doctor_id) != user["id"]:
+        raise HTTPException(status_code=404, detail="Ce médecin n'est pas dans votre périmètre.")
+
+    if not team.unassign_doctor(doctor_id):
+        raise HTTPException(status_code=404, detail="Ce médecin n'est pas dans votre périmètre.")
+
+    logger.info(f"Doctor {doctor_id} released by admin {user['id']}")
+
+    return {"removed": True}
+
+
+@router.get("/doctors/sessions")
+async def list_doctor_sessions(
+    doctor: Optional[str] = Query(default=None, description="Restrict to one doctor id."),
+    since: Optional[str] = Query(default=None, description="ISO date — presentations on or after it."),
+    limit: int = Query(default=100, ge=1, le=500),
+    user: Dict[str, Any] = Depends(get_current_user),
+):
+    """Presentations, from whichever side of the relationship is asking.
+
+    An admin reads the presentations received by their own doctors; a doctor
+    reads his own. Only `commercial` sessions appear: this is the visit-report
+    feed, which is why it filters on mode rather than reusing /team/sessions.
+    """
+    from app.api.dashboard import _parse_iso, _report_rows, _row_duration, _row_product
+    from app.auth import team, store
+
+    if user["role"] == "doctor":
+        roster = {
+            user["id"]: {
+                **_doctor_profile(user),
+                "assigned_at": team.doctor_assigned_at(user["id"]),
+                **_doctor_trace(user["id"]),
+            }
+        }
+        scope = "self"
+    elif user["role"] == "admin":
+        roster = _doctor_roster(user)
+        scope = "team"
+    else:
+        raise HTTPException(status_code=403, detail="Votre rôle ne permet pas cette action.")
+
+    if doctor:
+        if doctor not in roster:
+            raise HTTPException(status_code=404, detail="Ce médecin n'est pas dans votre périmètre.")
+        roster = {doctor: roster[doctor]}
+
+    since_dt = _parse_iso(since)
+    presentations: List[Dict[str, Any]] = []
+
+    for row in _report_rows():
+        if (row.get("mode") or "training") != "commercial":
+            continue
+
+        owner = row.get("user_id")
+
+        if owner not in roster:
+            continue
+
+        completed = _parse_iso(row.get("completed_at"))
+
+        if since_dt and (not completed or completed < since_dt):
+            continue
+
+        report = row.get("crm_report") or {}
+        presentations.append(
+            {
+                "session_id": row.get("session_id"),
+                "doctor_id": owner,
+                "doctor_name": roster[owner]["full_name"],
+                "specialty": roster[owner]["specialty"],
+                "city": roster[owner]["city"],
+                "product_focus": _row_product(row),
+                "visit_format": row.get("visit_format"),
+                "need_identified": report.get("need_identified"),
+                "engagement_level": report.get("engagement_level"),
+                "next_step": report.get("next_step"),
+                "next_step_date": report.get("next_step_date"),
+                "material_left": report.get("material_left", []),
+                "duration_seconds": round(_row_duration(row)),
+                "completed_at": row.get("completed_at"),
+            }
+        )
+
+    presentations.sort(key=lambda p: p.get("completed_at") or "", reverse=True)
+
+    return {
+        "total": len(presentations),
+        "scope": scope,
+        "doctors": list(roster.values()),
+        "filters": {"doctor": doctor, "since": since},
+        "sessions": presentations[:limit],
     }

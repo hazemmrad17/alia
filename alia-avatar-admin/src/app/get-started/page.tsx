@@ -2,14 +2,10 @@
 
 // Next.js Imports
 import { useEffect, useState } from 'react'
+
 import { useRouter } from 'next/navigation'
 
 // Shadcn UI Imports
-import { Card, CardContent } from '@/components/ui/card'
-import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
-
-// Lucide Icons
 import {
   GraduationCap,
   Stethoscope,
@@ -22,78 +18,101 @@ import {
   ArrowRight
 } from 'lucide-react'
 
+import { Card, CardContent } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+
+// Lucide Icons
+
 // Util Imports
 import { setStoredRole, getStoredRole, type UserRole } from '@/lib/user-role'
+import { landingPathFor } from '@/lib/auth'
+import { isAuthenticated } from '@/lib/auth'
 
 const HomePage = () => {
   const router = useRouter()
   const [activeRole, setActiveRole] = useState<UserRole | null>(null)
 
   useEffect(() => {
-    setActiveRole(getStoredRole())
-  }, [])
+    // Picking a workspace only makes sense once you have an account, so a
+    // signed-out visitor goes to the login page and comes back here after.
+    if (!isAuthenticated()) {
+      router.replace('/login?next=/get-started')
 
+      return
+    }
+
+    setActiveRole(getStoredRole())
+  }, [router])
+
+  // landingPathFor is the same mapping the sign-in flow uses, so choosing a
+  // persona here and signing in land on the same page for the same role.
   const enter = (role: UserRole) => {
     setStoredRole(role)
-    router.push(role === 'delegate' ? '/dashboard/training' : '/dashboard/commercial')
+    router.push(landingPathFor(role))
   }
 
   return (
-    <div className="min-h-screen w-full flex flex-col items-center justify-center bg-background p-4 md:p-8">
+    <div className='bg-background flex min-h-screen w-full flex-col items-center justify-center p-4 md:p-8'>
       {/* Header */}
-      <div className="text-center mb-8 mx-auto max-w-2xl">
-        <h1 className="text-4xl font-bold tracking-tight mb-2">ALIA Avatar</h1>
-        <p className="text-lg text-muted-foreground mb-4">
-          VITAL SA — Medical Intelligence Platform
-        </p>
-        <p className="text-sm text-muted-foreground mb-6">
+      <div className='mx-auto mb-8 max-w-2xl text-center'>
+        <h1 className='mb-2 text-4xl font-bold tracking-tight'>ALIA Avatar</h1>
+        <p className='text-muted-foreground mb-4 text-lg'>VITAL SA — Medical Intelligence Platform</p>
+        <p className='text-muted-foreground mb-6 text-sm'>
           Choose your workspace — each role has its own dashboard and navigation.
         </p>
       </div>
 
       {/* Two User Story Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 w-full max-w-5xl mx-auto">
+      <div className='mx-auto grid w-full max-w-5xl grid-cols-1 gap-6 md:grid-cols-2'>
         {/* Medical Delegate — Training */}
         <Card
-          className={`border-2 cursor-pointer transition-all hover:shadow-lg hover:-translate-y-1 ${
+          className={`cursor-pointer border-2 transition-all hover:-translate-y-1 hover:shadow-lg ${
             activeRole === 'delegate' ? 'border-primary shadow-lg' : 'border-border'
           }`}
           onClick={() => enter('delegate')}
         >
-          <CardContent className="p-6 text-center flex flex-col items-center">
-            <div className="flex flex-col items-center gap-3 mb-4">
-              <div className="flex items-center justify-center w-12 h-12 rounded-full bg-primary/10">
-                <GraduationCap className="w-6 h-6 text-primary" />
+          <CardContent className='flex flex-col items-center p-6 text-center'>
+            <div className='mb-4 flex flex-col items-center gap-3'>
+              <div className='bg-primary/10 flex h-12 w-12 items-center justify-center rounded-full'>
+                <GraduationCap className='text-primary h-6 w-6' />
               </div>
               <div>
-                <h2 className="text-xl font-bold">Medical Delegate</h2>
-                <p className="text-sm text-muted-foreground">Training Workspace</p>
+                <h2 className='text-xl font-bold'>Medical Delegate</h2>
+                <p className='text-muted-foreground text-sm'>Training Workspace</p>
               </div>
             </div>
 
-            <p className="text-muted-foreground mb-4">
-              Practice visiting simulated doctors with AI. Master the 6-step visit process,
-              handle objections, and improve your competence level.
+            <p className='text-muted-foreground mb-4'>
+              Practice visiting simulated doctors with AI. Master the 6-step visit process, handle objections, and
+              improve your competence level.
             </p>
 
-            <div className="flex flex-wrap justify-center gap-2 mb-4">
-              <Badge variant="secondary" className="gap-1">
-                <BarChart3 className="w-3 h-3" /> Step Performance
+            <div className='mb-4 flex flex-wrap justify-center gap-2'>
+              <Badge variant='secondary' className='gap-1'>
+                <BarChart3 className='h-3 w-3' /> Step Performance
               </Badge>
-              <Badge variant="secondary" className="gap-1">
-                <Users className="w-3 h-3" /> Doctor Personalities
+              <Badge variant='secondary' className='gap-1'>
+                <Users className='h-3 w-3' /> Doctor Personalities
               </Badge>
-              <Badge variant="secondary" className="gap-1">
-                <TrendingUp className="w-3 h-3" /> Level Progression
+              <Badge variant='secondary' className='gap-1'>
+                <TrendingUp className='h-3 w-3' /> Level Progression
               </Badge>
-              <Badge variant="secondary" className="gap-1">
-                <BookOpen className="w-3 h-3" /> SONCAS Framework
+              <Badge variant='secondary' className='gap-1'>
+                <BookOpen className='h-3 w-3' /> SONCAS Framework
               </Badge>
             </div>
 
-            <div className="flex justify-center gap-2 mt-auto">
-              <Button size="sm" className="gap-1" onClick={e => { e.stopPropagation(); enter('delegate') }}>
-                Enter Training Space <ArrowRight className="w-3 h-3" />
+            <div className='mt-auto flex justify-center gap-2'>
+              <Button
+                size='sm'
+                className='gap-1'
+                onClick={e => {
+                  e.stopPropagation()
+                  enter('delegate')
+                }}
+              >
+                Enter Training Space <ArrowRight className='h-3 w-3' />
               </Button>
             </div>
           </CardContent>
@@ -101,45 +120,52 @@ const HomePage = () => {
 
         {/* Doctor / Pharmacist — Commercial */}
         <Card
-          className={`border-2 cursor-pointer transition-all hover:shadow-lg hover:-translate-y-1 ${
-            activeRole === 'commercial' ? 'border-primary shadow-lg' : 'border-border'
+          className={`cursor-pointer border-2 transition-all hover:-translate-y-1 hover:shadow-lg ${
+            activeRole === 'doctor' ? 'border-primary shadow-lg' : 'border-border'
           }`}
-          onClick={() => enter('commercial')}
+          onClick={() => enter('doctor')}
         >
-          <CardContent className="p-6 text-center flex flex-col items-center">
-            <div className="flex flex-col items-center gap-3 mb-4">
-              <div className="flex items-center justify-center w-12 h-12 rounded-full bg-primary/10">
-                <Stethoscope className="w-6 h-6 text-primary" />
+          <CardContent className='flex flex-col items-center p-6 text-center'>
+            <div className='mb-4 flex flex-col items-center gap-3'>
+              <div className='bg-primary/10 flex h-12 w-12 items-center justify-center rounded-full'>
+                <Stethoscope className='text-primary h-6 w-6' />
               </div>
               <div>
-                <h2 className="text-xl font-bold">Doctor / Pharmacist</h2>
-                <p className="text-sm text-muted-foreground">Commercial Workspace</p>
+                <h2 className='text-xl font-bold'>Doctor / Pharmacist</h2>
+                <p className='text-muted-foreground text-sm'>Commercial Workspace</p>
               </div>
             </div>
 
-            <p className="text-muted-foreground mb-4">
-              Receive product presentations from the ALIA Avatar. Explore VITAL SA&apos;s
-              pharmaceutical catalog and see what fits your practice.
+            <p className='text-muted-foreground mb-4'>
+              Receive product presentations from the ALIA Avatar. Explore VITAL SA&apos;s pharmaceutical catalog and see
+              what fits your practice.
             </p>
 
-            <div className="flex flex-wrap justify-center gap-2 mb-4">
-              <Badge variant="secondary" className="gap-1">
-                <Pill className="w-3 h-3" /> 100+ Products
+            <div className='mb-4 flex flex-wrap justify-center gap-2'>
+              <Badge variant='secondary' className='gap-1'>
+                <Pill className='h-3 w-3' /> 100+ Products
               </Badge>
-              <Badge variant="secondary" className="gap-1">
-                <MessageSquare className="w-3 h-3" /> CRM Reports
+              <Badge variant='secondary' className='gap-1'>
+                <MessageSquare className='h-3 w-3' /> CRM Reports
               </Badge>
-              <Badge variant="secondary" className="gap-1">
-                <BarChart3 className="w-3 h-3" /> Product Reach
+              <Badge variant='secondary' className='gap-1'>
+                <BarChart3 className='h-3 w-3' /> Product Reach
               </Badge>
-              <Badge variant="secondary" className="gap-1">
-                <TrendingUp className="w-3 h-3" /> Engagement
+              <Badge variant='secondary' className='gap-1'>
+                <TrendingUp className='h-3 w-3' /> Engagement
               </Badge>
             </div>
 
-            <div className="flex justify-center gap-2 mt-auto">
-              <Button size="sm" className="gap-1" onClick={e => { e.stopPropagation(); enter('commercial') }}>
-                Enter Commercial Space <ArrowRight className="w-3 h-3" />
+            <div className='mt-auto flex justify-center gap-2'>
+              <Button
+                size='sm'
+                className='gap-1'
+                onClick={e => {
+                  e.stopPropagation()
+                  enter('doctor')
+                }}
+              >
+                Enter Commercial Space <ArrowRight className='h-3 w-3' />
               </Button>
             </div>
           </CardContent>
@@ -147,9 +173,7 @@ const HomePage = () => {
       </div>
 
       {/* Footer */}
-      <p className="mt-8 text-sm text-muted-foreground">
-        Powered by VITAL SA • ALIA Avatar v1.0
-      </p>
+      <p className='text-muted-foreground mt-8 text-sm'>Powered by VITAL SA • ALIA Avatar v1.0</p>
     </div>
   )
 }

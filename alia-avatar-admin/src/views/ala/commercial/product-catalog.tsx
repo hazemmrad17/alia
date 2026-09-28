@@ -15,15 +15,9 @@ import {
   PaginationItem,
   PaginationLink,
   PaginationNext,
-  PaginationPrevious,
+  PaginationPrevious
 } from '@/components/ui/pagination'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { loadCatalog } from '@/lib/catalog-data'
 import type { Product } from '@/types/alia'
 import { resolveRole } from '@/lib/user-role'
@@ -35,14 +29,46 @@ const PAGE_SIZE = 6
 type Palette = { gradient: string; badge: string; accent: string }
 
 const PALETTES: Palette[] = [
-  { gradient: 'from-rose-500/90 to-rose-800', badge: 'bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300', accent: '#e11d48' },
-  { gradient: 'from-amber-500/90 to-amber-800', badge: 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300', accent: '#d97706' },
-  { gradient: 'from-purple-500/90 to-purple-800', badge: 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300', accent: '#7c3aed' },
-  { gradient: 'from-emerald-500/90 to-emerald-800', badge: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300', accent: '#059669' },
-  { gradient: 'from-blue-500/90 to-blue-800', badge: 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300', accent: '#2563eb' },
-  { gradient: 'from-orange-500/90 to-orange-800', badge: 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300', accent: '#ea580c' },
-  { gradient: 'from-cyan-500/90 to-cyan-800', badge: 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300', accent: '#0891b2' },
-  { gradient: 'from-fuchsia-500/90 to-fuchsia-800', badge: 'bg-fuchsia-100 text-fuchsia-700 dark:bg-fuchsia-900/40 dark:text-fuchsia-300', accent: '#c026d3' },
+  {
+    gradient: 'from-rose-500/90 to-rose-800',
+    badge: 'bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300',
+    accent: '#e11d48'
+  },
+  {
+    gradient: 'from-amber-500/90 to-amber-800',
+    badge: 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300',
+    accent: '#d97706'
+  },
+  {
+    gradient: 'from-purple-500/90 to-purple-800',
+    badge: 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300',
+    accent: '#7c3aed'
+  },
+  {
+    gradient: 'from-emerald-500/90 to-emerald-800',
+    badge: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300',
+    accent: '#059669'
+  },
+  {
+    gradient: 'from-blue-500/90 to-blue-800',
+    badge: 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300',
+    accent: '#2563eb'
+  },
+  {
+    gradient: 'from-orange-500/90 to-orange-800',
+    badge: 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300',
+    accent: '#ea580c'
+  },
+  {
+    gradient: 'from-cyan-500/90 to-cyan-800',
+    badge: 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300',
+    accent: '#0891b2'
+  },
+  {
+    gradient: 'from-fuchsia-500/90 to-fuchsia-800',
+    badge: 'bg-fuchsia-100 text-fuchsia-700 dark:bg-fuchsia-900/40 dark:text-fuchsia-300',
+    accent: '#c026d3'
+  }
 ]
 
 export const paletteFor = (gamme: string): Palette => {
@@ -53,20 +79,38 @@ export const paletteFor = (gamme: string): Palette => {
 // API names arrive in ALL CAPS — restore readable case while keeping accents.
 // Word starts are uppercased (é/è/à stay intact) and short French prepositions
 // stay lowercase: "Boîte de 30 comprimés" not "Boîte De 30 Comprimés".
-const FRENCH_STOPWORDS = new Set(['de', 'du', 'des', 'en', 'à', 'et', 'la', 'le', 'les', 'au', 'aux', 'sur', 'pour', 'avec'])
+const FRENCH_STOPWORDS = new Set([
+  'de',
+  'du',
+  'des',
+  'en',
+  'à',
+  'et',
+  'la',
+  'le',
+  'les',
+  'au',
+  'aux',
+  'sur',
+  'pour',
+  'avec'
+])
 
 export const titleCase = (value: string): string =>
-  value
-    .toLowerCase()
-    .replace(/(^|[\s\-/])(\p{L}+)/gu, (match, sep: string, word: string) => {
-      const first = sep === ' ' && FRENCH_STOPWORDS.has(word) ? word : word.charAt(0).toUpperCase() + word.slice(1)
-      return sep + first
-    })
+  value.toLowerCase().replace(/(^|[\s\-/])(\p{L}+)/gu, (match, sep: string, word: string) => {
+    const first = sep === ' ' && FRENCH_STOPWORDS.has(word) ? word : word.charAt(0).toUpperCase() + word.slice(1)
+    return sep + first
+  })
 
 // Slugify a product name the same way scripts/fetch-product-images.mjs does,
 // so /images/products/<slug>.jpg resolves when the photo was downloaded.
 const productImage = (name: string): string =>
-  `/images/products/${name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}.jpg`
+  `/images/products/${name
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')}.jpg`
 
 function ProductPhoto({ name, gamme }: { name: string; gamme: string }) {
   const [failed, setFailed] = useState(false)
@@ -92,17 +136,17 @@ function ProductPack({ name, gamme }: { name: string; gamme: string }) {
   return (
     <div className='relative flex h-full w-full items-center justify-center'>
       <div className='pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_72%_18%,rgba(255,255,255,0.3),transparent_58%)]' />
-      <div className='relative h-[88%] w-36 max-w-[85%] overflow-hidden rounded-md bg-white shadow-xl shadow-black/25 ring-1 ring-black/10'>
+      <div className='relative h-[88%] w-36 max-w-[85%] overflow-hidden rounded-md bg-white shadow-xl ring-1 shadow-black/25 ring-black/10'>
         {/* Brand strip */}
         <div className='h-1.5 w-full' style={{ backgroundColor: accent }} />
         <div className='flex items-center justify-between px-2.5 pt-2'>
           <span className='text-[11px] font-black tracking-widest text-slate-900'>VITAL</span>
-          <span className='text-[8px] font-semibold uppercase tracking-wider text-slate-400'>Santé</span>
+          <span className='text-[8px] font-semibold tracking-wider text-slate-400 uppercase'>Santé</span>
         </div>
         {/* Pack body */}
         <div className='flex flex-col items-center justify-center gap-1 px-2 py-1.5 text-center'>
           <Pill className='size-6 text-slate-800' strokeWidth={2.2} />
-          <span className='line-clamp-2 text-xs font-extrabold uppercase leading-tight tracking-tight text-slate-900'>
+          <span className='line-clamp-2 text-xs leading-tight font-extrabold tracking-tight text-slate-900 uppercase'>
             {name}
           </span>
         </div>
@@ -151,7 +195,9 @@ export default function ProductCatalogView() {
       setLoading(false)
     })
 
-    return () => { mounted = false }
+    return () => {
+      mounted = false
+    }
   }, [])
 
   const gammes = useMemo(
@@ -166,13 +212,7 @@ export default function ProductCatalogView() {
       if (gamme !== 'all' && p.gamme !== gamme) return false
       if (!q) return true
 
-      return [
-        p.name,
-        p.gamme,
-        p.presentation,
-        p.packaging,
-        ...(p.indications ?? []),
-      ]
+      return [p.name, p.gamme, p.presentation, p.packaging, ...(p.indications ?? [])]
         .filter(Boolean)
         .some(field => field!.toLowerCase().includes(q))
     })
@@ -183,45 +223,52 @@ export default function ProductCatalogView() {
   const pageItems = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE)
 
   const startSession = (productName: string) => {
-    router.push(
-      isDelegate
-        ? '/simulation'
-        : `/commercial?product=${encodeURIComponent(productName)}`
-    )
+    router.push(isDelegate ? '/simulation' : `/commercial?product=${encodeURIComponent(productName)}`)
   }
 
   return (
     <div className='space-y-5'>
       {/* Controls */}
-      <div className='flex items-center justify-between gap-3 flex-wrap'>
-        <div className='relative flex-1 min-w-52 max-w-sm'>
-          <Search className='absolute left-2.5 top-2.5 size-4 text-muted-foreground' />
+      <div className='flex flex-wrap items-center justify-between gap-3'>
+        <div className='relative max-w-sm min-w-52 flex-1'>
+          <Search className='text-muted-foreground absolute top-2.5 left-2.5 size-4' />
           <Input
             placeholder='Search products, gamme, indication…'
             className='pl-9'
             value={search}
-            onChange={e => { setSearch(e.target.value); setPage(1) }}
+            onChange={e => {
+              setSearch(e.target.value)
+              setPage(1)
+            }}
           />
         </div>
 
         <div className='flex items-center gap-2'>
-          <Select value={gamme} onValueChange={v => { if (v) { setGamme(v); setPage(1) } }}>
+          <Select
+            value={gamme}
+            onValueChange={v => {
+              if (v) {
+                setGamme(v)
+                setPage(1)
+              }
+            }}
+          >
             <SelectTrigger className='w-44'>
               <SelectValue placeholder='All gammes' />
             </SelectTrigger>
             <SelectContent className='max-h-72'>
               <SelectItem value='all'>All gammes</SelectItem>
               {gammes.map(g => (
-                <SelectItem key={g} value={g}>{titleCase(g)}</SelectItem>
+                <SelectItem key={g} value={g}>
+                  {titleCase(g)}
+                </SelectItem>
               ))}
             </SelectContent>
           </Select>
 
           <div className='flex items-center gap-2'>
-            <Package className='size-4 text-primary' />
-            <span className='text-sm font-medium whitespace-nowrap'>
-              {products.length} products
-            </span>
+            <Package className='text-primary size-4' />
+            <span className='text-sm font-medium whitespace-nowrap'>{products.length} products</span>
           </div>
         </div>
       </div>
@@ -233,7 +280,10 @@ export default function ProductCatalogView() {
           {source === 'local' ? (
             <>Backend offline — browsing the full VITAL catalog ({products.length} products) from local data.</>
           ) : (
-            <>Backend offline — showing a sample of {products.length} products. Start the API to browse the full VITAL catalog.</>
+            <>
+              Backend offline — showing a sample of {products.length} products. Start the API to browse the full VITAL
+              catalog.
+            </>
           )}
         </div>
       )}
@@ -253,7 +303,7 @@ export default function ProductCatalogView() {
           ))}
         </div>
       ) : filtered.length === 0 ? (
-        <div className='flex flex-col items-center justify-center gap-3 py-16 text-muted-foreground'>
+        <div className='text-muted-foreground flex flex-col items-center justify-center gap-3 py-16'>
           <PackageOpen className='size-10 opacity-30' />
           <p className='text-sm'>No products found for &ldquo;{search}&rdquo;</p>
         </div>
@@ -267,23 +317,33 @@ export default function ProductCatalogView() {
               const visibleIndications = (product.indications ?? []).slice(0, 3)
               const extraIndications = (product.indications?.length ?? 0) - visibleIndications.length
 
+              // Keyed by the product's identity, not by its name: four names in
+              // the catalogue (HYDRA, FERBIOTIC, FERBIOTIC LIPO, VITAL SA) exist
+              // in two gammes each, and a name-only key made React render the
+              // duplicate as a sibling collision.
               return (
-                <Card key={product.name} className='group overflow-hidden transition-shadow hover:shadow-lg'>
+                <Card
+                  key={`${product.name}·${product.gamme ?? ''}`}
+                  className='group overflow-hidden transition-shadow hover:shadow-lg'
+                >
                   {/* Cover / thumbnail */}
                   <button
-                type='button'
-                onClick={() => router.push(`/products/${encodeURIComponent(product.name)}`)}
-                className={`relative flex h-36 w-full cursor-pointer items-center justify-center bg-gradient-to-br ${style.gradient} p-4 text-left transition-[filter] hover:brightness-110`}
-                aria-label={`Open details for ${displayName}`}
-              >
+                    type='button'
+                    onClick={() => router.push(`/products/${encodeURIComponent(product.name)}`)}
+                    className={`relative flex h-36 w-full cursor-pointer items-center justify-center bg-gradient-to-br ${style.gradient} p-4 text-left transition-[filter] hover:brightness-110`}
+                    aria-label={`Open details for ${displayName}`}
+                  >
                     <ProductPhoto name={displayName} gamme={product.gamme ?? ''} />
                     {product.gamme && (
-                      <Badge className={`absolute left-3 top-3 ${style.badge} border-0 text-[11px]`}>
+                      <Badge className={`absolute top-3 left-3 ${style.badge} border-0 text-[11px]`}>
                         {titleCase(product.gamme)}
                       </Badge>
                     )}
                     {product.presentation && (
-                      <Badge variant='secondary' className='absolute right-3 top-3 max-w-[45%] bg-background/80 text-[11px] backdrop-blur'>
+                      <Badge
+                        variant='secondary'
+                        className='bg-background/80 absolute top-3 right-3 max-w-[45%] text-[11px] backdrop-blur'
+                      >
                         <span className='truncate'>{titleCase(product.presentation)}</span>
                       </Badge>
                     )}
@@ -293,13 +353,13 @@ export default function ProductCatalogView() {
                     <button
                       type='button'
                       onClick={() => router.push(`/products/${encodeURIComponent(product.name)}`)}
-                      className='text-left transition-colors hover:text-primary'
+                      className='hover:text-primary text-left transition-colors'
                     >
-                      <h3 className='text-base font-bold leading-snug'>{displayName}</h3>
+                      <h3 className='text-base leading-snug font-bold'>{displayName}</h3>
                     </button>
 
                     {packagingLine && (
-                      <p className='mt-1 flex items-center gap-1.5 text-xs text-muted-foreground'>
+                      <p className='text-muted-foreground mt-1 flex items-center gap-1.5 text-xs'>
                         <Package className='size-3.5 shrink-0' />
                         <span className='truncate'>{packagingLine}</span>
                       </p>
@@ -313,7 +373,7 @@ export default function ProductCatalogView() {
                           </Badge>
                         ))}
                         {extraIndications > 0 && (
-                          <Badge variant='outline' className='px-2 py-0 text-[11px] font-normal text-muted-foreground'>
+                          <Badge variant='outline' className='text-muted-foreground px-2 py-0 text-[11px] font-normal'>
                             +{extraIndications}
                           </Badge>
                         )}
@@ -344,7 +404,7 @@ export default function ProductCatalogView() {
           {/* Pagination */}
           {totalPages > 1 && (
             <>
-              <p className='text-center text-xs text-muted-foreground'>
+              <p className='text-muted-foreground text-center text-xs'>
                 Showing {pageItems.length > 0 ? (currentPage - 1) * PAGE_SIZE + 1 : 0}–
                 {(currentPage - 1) * PAGE_SIZE + pageItems.length} of {filtered.length}
               </p>
@@ -356,7 +416,10 @@ export default function ProductCatalogView() {
                       text=''
                       aria-disabled={currentPage === 1}
                       className={currentPage === 1 ? 'pointer-events-none opacity-50' : ''}
-                      onClick={e => { e.preventDefault(); setPage(Math.max(1, currentPage - 1)) }}
+                      onClick={e => {
+                        e.preventDefault()
+                        setPage(Math.max(1, currentPage - 1))
+                      }}
                     />
                   </PaginationItem>
 
@@ -370,7 +433,10 @@ export default function ProductCatalogView() {
                         <PaginationLink
                           href='#'
                           isActive={p === currentPage}
-                          onClick={e => { e.preventDefault(); setPage(p) }}
+                          onClick={e => {
+                            e.preventDefault()
+                            setPage(p)
+                          }}
                         >
                           {p}
                         </PaginationLink>
@@ -384,7 +450,10 @@ export default function ProductCatalogView() {
                       text=''
                       aria-disabled={currentPage === totalPages}
                       className={currentPage === totalPages ? 'pointer-events-none opacity-50' : ''}
-                      onClick={e => { e.preventDefault(); setPage(Math.min(totalPages, currentPage + 1)) }}
+                      onClick={e => {
+                        e.preventDefault()
+                        setPage(Math.min(totalPages, currentPage + 1))
+                      }}
                     />
                   </PaginationItem>
                 </PaginationContent>

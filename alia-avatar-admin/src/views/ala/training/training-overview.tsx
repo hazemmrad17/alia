@@ -368,7 +368,7 @@ export default function TrainingOverview() {
                       : '~18 min en moyenne'}
                   </span>
                   <Link
-                    href='/dashboard/training/sessions'
+                    href='/dashboard/training/simulator'
                     className='inline-flex h-8 items-center gap-1 rounded-md border border-border px-3 text-sm font-medium text-foreground transition-colors hover:bg-accent'
                   >
                     Tout voir
@@ -607,7 +607,7 @@ export default function TrainingOverview() {
                       <span className='text-xl font-semibold'>{formatDuration(w.avgDuration)}</span>
                     </div>
                     <Link
-                      href='/dashboard/training/sessions'
+                      href='/dashboard/training/simulator'
                       className='inline-flex h-8 items-center gap-1 rounded-md border border-border px-3 text-sm font-medium text-foreground transition-colors hover:bg-accent'
                     >
                       Toutes mes sessions
@@ -688,12 +688,13 @@ export default function TrainingOverview() {
                   <TableHead className='text-center'>Durée</TableHead>
                   <TableHead className='text-center'>Votre note</TableHead>
                   <TableHead className='min-w-40'>Commentaire</TableHead>
+                  <TableHead className='text-end'>Évaluation</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {loading && pageItems.length === 0
                   ? Array.from({ length: 5 }).map((_, i) => (
-                      <TableRow key={i}><TableCell colSpan={7}><Skeleton className='h-9 w-full' /></TableCell></TableRow>
+                      <TableRow key={i}><TableCell colSpan={8}><Skeleton className='h-9 w-full' /></TableCell></TableRow>
                     ))
                   : pageItems.map(s => {
                       const when = s.completed_at ? new Date(s.completed_at) : null
@@ -727,12 +728,24 @@ export default function TrainingOverview() {
                           <TableCell className='max-w-[20rem] text-sm text-muted-foreground'>
                             {s.comment ? <span className='line-clamp-2'>{s.comment}</span> : <span className='text-muted-foreground/50'>Aucun</span>}
                           </TableCell>
+                          <TableCell className='text-end'>
+                            {/* Full review: scores, steps, transcript and visit report. */}
+                            <Button
+                              variant='outline'
+                              size='sm'
+                              className='gap-1.5'
+                              nativeButton={false}
+                              render={<Link href={`/dashboard/training/sessions/${s.session_id}`} />}
+                            >
+                              <Eye className='size-3.5' /> Détail
+                            </Button>
+                          </TableCell>
                         </TableRow>
                       )
                     })}
                 {!loading && pageItems.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={7} className='py-10 text-center text-muted-foreground'>
+                    <TableCell colSpan={8} className='py-10 text-center text-muted-foreground'>
                       Aucune session enregistrée pour ces filtres. Lancez une simulation pour commencer.
                     </TableCell>
                   </TableRow>

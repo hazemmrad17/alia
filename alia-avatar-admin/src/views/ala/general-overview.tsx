@@ -14,7 +14,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import {
-  PlayCircle, Star, CalendarDays, Pill, ChevronRight, RefreshCw, Zap,
+  PlayCircle, Star, CalendarDays, Pill, ChevronRight, RefreshCw, Zap, Eye,
   MessageSquare, BookOpen, ShoppingCart, Timer, TrendingUp, TrendingDown,
   EllipsisVertical, Trophy, Target
 } from 'lucide-react'
@@ -248,7 +248,7 @@ export default function GeneralOverview() {
                   {saved?.average_rating != null ? `Note moyenne ${saved.average_rating}/5` : 'Aucun avis'}
                 </span>
                 <Link
-                  href='/dashboard/training/sessions'
+                  href='/dashboard/training/simulator'
                   className='inline-flex h-8 items-center gap-1 rounded-md border border-border px-3 text-sm font-medium transition-colors hover:bg-accent'
                 >
                   Tout voir <ChevronRight className='size-4' />
@@ -579,7 +579,8 @@ export default function GeneralOverview() {
                       <TableHead>Profil médecin</TableHead>
                       <TableHead>Format</TableHead>
                       <TableHead>Durée</TableHead>
-                      <TableHead className='pr-6 text-center'>Votre note</TableHead>
+                      <TableHead className='text-center'>Votre note</TableHead>
+                      <TableHead className='pr-6 text-end'>Évaluation</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -596,7 +597,19 @@ export default function GeneralOverview() {
                           <TableCell className='text-sm capitalize'>{s.doctor_style}</TableCell>
                           <TableCell className='text-sm capitalize'>{s.visit_format}</TableCell>
                           <TableCell className='whitespace-nowrap text-sm tabular-nums'>{fmtDuration(s.duration_seconds)}</TableCell>
-                          <TableCell className='pr-6 text-center'><Stars value={s.rating} /></TableCell>
+                          <TableCell className='text-center'><Stars value={s.rating} /></TableCell>
+                          <TableCell className='pr-6 text-end'>
+                            {/* Full review: scores, steps, transcript and visit report. */}
+                            <Button
+                              variant='outline'
+                              size='sm'
+                              className='gap-1.5'
+                              nativeButton={false}
+                              render={<Link href={`/dashboard/training/sessions/${s.session_id}`} />}
+                            >
+                              <Eye className='size-3.5' /> Détail
+                            </Button>
+                          </TableCell>
                         </TableRow>
                       )
                     })}

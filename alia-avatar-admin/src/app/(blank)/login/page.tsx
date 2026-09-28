@@ -1,11 +1,23 @@
 import type { Metadata } from 'next'
-import Login from '@/views/pages/auth/login'
+
+// Component Imports
+import LoginForm from '@/components/auth/login-form'
 
 export const metadata: Metadata = {
-  title: 'Login | ALIA Avatar',
-  description: 'Sign in to ALIA Avatar training or commercial portals.',
+  title: 'Connexion | ALIA Avatar',
+  description: 'Connectez-vous à votre espace de formation ou de suivi ALIA Avatar.'
 }
 
-export default function DirectLoginPage() {
-  return <Login />
+interface LoginPageProps {
+  /** Next.js 16 hands page params to the server component as a promise. */
+  searchParams: Promise<{ next?: string }>
 }
+
+const LoginPage = async ({ searchParams }: LoginPageProps) => {
+  const { next } = await searchParams
+
+  // Read on the server so the form needs no useSearchParams Suspense boundary.
+  return <LoginForm nextPath={next} />
+}
+
+export default LoginPage

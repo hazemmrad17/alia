@@ -24,10 +24,11 @@ import base64
 import json
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
 from loguru import logger
 
 from app.avatar.tts import AUDIO_MIME, VoiceUnavailable, stt_engine, tts_engine
+from app.auth.deps import get_current_user, user_from_token
 from app.conversation.orchestrator import orchestrator
 from app.models.schemas import (
     ConversationMode,
@@ -222,9 +223,39 @@ async def _handle_audio_turn(websocket: WebSocket, payload: Dict[str, Any], sess
 
 
 @router.websocket("/ws/{session_id}")
-async def websocket_conversation(websocket: WebSocket, session_id: str):
-    """Real-time conversation: typed messages and spoken turns."""
+async def websocket_conversation(
+    websocket: WebSocket, session_id: str, token: Optional[str] = Query(default=None)
+):
+    """Real-time conversation: typed messages and spoken turns.
+
+    A WebSocket handshake cannot carry an ``Authorization`` header from the
+    browser, so the token arrives as a query parameter and is verified before
+    the socket is accepted. Rejection uses 4401 (the app's own code, since 1008
+    is indistinguishable from a network drop) so the client can send the user
+    back to the login page instead of retrying forever.
+    """
+    try:
+        user = user_from_token(token)
+    except Exception:  # noqa: BLE001 - any auth failure closes the socket
+        logger.warning(f"Rejected unauthenticated WebSocket for session {session_id}")
+        await websocket.close(code=4401)
+        return
+
+    # The token proves who is asking, not that the session is theirs. Without
+    # this, any authenticated account holding a session id could drive someone
+    # else's conversation — the REST path checks the same thing.
+    session = orchestrator.sessions.get(session_id)
+
+    if session and session.user_id != user["id"]:
+        logger.warning(f"Rejected WebSocket for another account's session {session_id}")
+        await websocket.close(code=4403)
+        return
+
     await manager.connect(websocket)
+    logger.info(
+        f"WebSocket connected for session {session_id} as {user.get('email')} "
+        f"({user.get('tenant_id')})"
+    )
     logger.info(f"WebSocket connected for session {session_id}")
 
     try:
@@ -266,18 +297,32 @@ async def websocket_conversation(websocket: WebSocket, session_id: str):
 
 
 @router.post("/training/start")
-async def start_training_session(request: StartSessionRequest):
-    """Start a training session with specific parameters."""
+async def start_training_session(
+    request: StartSessionRequest,
+    user: Dict[str, Any] = Depends(get_current_user),
+):
+    """Start a training session with specific parameters.
+
+    Identity is taken from the token and overwrites whatever the body carried,
+    exactly as on /session/start — this endpoint used to require a token but
+    leave `user_id` as the client sent it, which is a second door into the same
+    sessions that skips attribution.
+    """
     from app.models.schemas import ConversationMode
 
     request.mode = ConversationMode.TRAINING
+    request.user_id = user["id"]
     return await orchestrator.start_session(request)
 
 
 @router.post("/commercial/start")
-async def start_commercial_session(request: StartSessionRequest):
-    """Start a commercial presentation session."""
+async def start_commercial_session(
+    request: StartSessionRequest,
+    user: Dict[str, Any] = Depends(get_current_user),
+):
+    """Start a commercial presentation session, stamped with the caller."""
     from app.models.schemas import ConversationMode
 
     request.mode = ConversationMode.COMMERCIAL
+    request.user_id = user["id"]
     return await orchestrator.start_session(request)

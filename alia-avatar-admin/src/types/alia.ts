@@ -222,7 +222,7 @@ export interface FormatInfo {
 export const STEP_META: Record<VisitStep, { label: string; color: string; bgClass: string; textClass: string; icon: string }> = {
   introduction: { label: "Introduction", color: "#3b82f6", bgClass: "bg-blue-500", textClass: "text-blue-500", icon: "" },
   sondage: { label: "Sondage", color: "#a855f7", bgClass: "bg-purple-500", textClass: "text-purple-500", icon: "" },
-  synthese: { label: "Synthese", color: "#22c55e", bgClass: "bg-green-500", textClass: "text-green-500", icon: "" },
+  synthese: { label: "Synthèse", color: "#22c55e", bgClass: "bg-green-500", textClass: "text-green-500", icon: "" },
   objections: { label: "Objections", color: "#f97316", bgClass: "bg-orange-500", textClass: "text-orange-500", icon: "" },
   argumentation: { label: "Argumentation", color: "#ef4444", bgClass: "bg-red-500", textClass: "text-red-500", icon: "" },
   conclusion: { label: "Conclusion", color: "#14b8a6", bgClass: "bg-teal-500", textClass: "text-teal-500", icon: "" },
